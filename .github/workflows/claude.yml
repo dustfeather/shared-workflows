@@ -12,6 +12,10 @@ on:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
 
+# Top-level default: minimum read. The job widens what it needs.
+permissions:
+  contents: read
+
 jobs:
   claude:
     if: |
