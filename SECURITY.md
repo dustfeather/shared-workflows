@@ -50,6 +50,34 @@ caller pays for its own Claude/Chrome/AMO usage with its own credentials.
 Conversely, a caller cannot use these workflows to extract secrets from
 this repo. The token-exchange flow is one-directional caller → called.
 
+### Cross-owner inheritance gap
+
+`secrets: inherit` does **not** reliably carry **org-level secrets with
+"selected" visibility** when the calling workflow and the called workflow
+live under different owners (e.g. `ITGuys-RO/*` calling
+`dustfeather/shared-workflows`). The symptom is:
+
+```
+Error when evaluating 'secrets'. .github/workflows/<shim>.yml: Secret X
+is required, but not provided while calling.
+```
+
+The fix is to pass the secret explicitly:
+
+```yaml
+secrets:
+  CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+```
+
+The reference resolves in the caller's context, where the org-level
+selected secret IS visible to the calling repo, and is then forwarded as
+a named secret to the called workflow — bypassing the cross-owner
+`inherit` gap. See README.md "Cross-owner callers" for the full pattern.
+
+This is not a security vulnerability — it's a defensive default by
+GitHub. It just means same-owner callers get a convenience shortcut
+(`inherit`) that cross-owner callers don't.
+
 ## What's in scope
 
 - Workflow files under `.github/workflows/`

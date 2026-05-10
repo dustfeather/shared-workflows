@@ -101,12 +101,57 @@ jobs:
 ## Secrets
 
 Each calling repo must have `CLAUDE_CODE_OAUTH_TOKEN` set — either as a
-repository secret or inherited from an organization secret. `secrets:
-inherit` passes it through.
+repository secret or inherited from an organization secret. The shim then
+needs to pass it through.
 
 **Reusable workflows run in the caller's context with the caller's secrets.**
 The central repo's secrets are not visible to callers; each caller pays for
 its own Claude usage with its own token.
+
+### Same-owner callers — `secrets: inherit` works
+
+When the calling repo is owned by the same account as `shared-workflows`
+(i.e. another `dustfeather/*` repo), the shim can use:
+
+```yaml
+jobs:
+  review:
+    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v1
+    secrets: inherit
+```
+
+`inherit` carries every secret the caller can see — both repo-level and
+org-level — into the called workflow.
+
+### Cross-owner callers — explicit secret pass required
+
+When the caller lives under a **different owner** (e.g. an `ITGuys-RO/*`
+repo calling `dustfeather/shared-workflows`), `secrets: inherit` does NOT
+reliably pass **org-level secrets with "selected" visibility** across the
+owner boundary. You'll see this error from the called workflow's first
+job:
+
+```
+Error when evaluating 'secrets'. .github/workflows/claude-code-review.yml
+(Line: N, Col: M): Secret CLAUDE_CODE_OAUTH_TOKEN is required, but not
+provided while calling.
+```
+
+The fix is to pass the secret explicitly. The reference is resolved in
+the **caller's** context (where the org secret IS visible to the repo)
+and forwarded as a named secret:
+
+```yaml
+jobs:
+  review:
+    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v1
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+```
+
+This works in both cases (same-owner and cross-owner), so when in doubt,
+prefer the explicit form. `inherit` is just a convenience shortcut for
+the same-owner case.
 
 ## Configuration
 
