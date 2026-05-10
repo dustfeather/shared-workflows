@@ -31,6 +31,10 @@ on:
         description: package.json script name for type-checking
         type: string
         default: typecheck
+      script-build:
+        description: package.json script name for the build step (only run when run-build is true)
+        type: string
+        default: build
       run-lint:
         type: boolean
         default: true
@@ -40,6 +44,14 @@ on:
       run-typecheck:
         type: boolean
         default: true
+      run-build:
+        description: |
+          Run the build script to verify it succeeds end-to-end. Off by
+          default because not every project has a meaningful `build`
+          script in CI. Turn on for projects (e.g. browser extensions)
+          where the build itself is the most useful PR-time check.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -104,11 +116,13 @@ jobs:
           LINT: ${{ inputs.script-lint }}
           TEST: ${{ inputs.script-test }}
           TC:   ${{ inputs.script-typecheck }}
+          BLD:  ${{ inputs.script-build }}
         run: |
           has() { jq -e --arg s "$1" '.scripts[$s] // empty' package.json >/dev/null 2>&1 && echo true || echo false; }
           echo "has_lint=$(has "$LINT")"            >> "$GITHUB_OUTPUT"
           echo "has_test=$(has "$TEST")"            >> "$GITHUB_OUTPUT"
           echo "has_typecheck=$(has "$TC")"         >> "$GITHUB_OUTPUT"
+          echo "has_build=$(has "$BLD")"            >> "$GITHUB_OUTPUT"
 
       - if: inputs.run-lint && steps.scripts.outputs.has_lint == 'true'
         name: Lint
@@ -143,20 +157,34 @@ jobs:
             bun)  bun run "$SCRIPT" ;;
           esac
 
+      - if: inputs.run-build && steps.scripts.outputs.has_build == 'true'
+        name: Build
+        env: { PM: "${{ steps.pm.outputs.pm }}", SCRIPT: "${{ inputs.script-build }}" }
+        run: |
+          case "$PM" in
+            pnpm) pnpm run "$SCRIPT" ;;
+            npm)  npm run "$SCRIPT" ;;
+            yarn) yarn run "$SCRIPT" ;;
+            bun)  bun run "$SCRIPT" ;;
+          esac
+
       - name: Summary of skipped steps
         if: always()
         env:
           HL: ${{ steps.scripts.outputs.has_lint }}
           HT: ${{ steps.scripts.outputs.has_test }}
           HC: ${{ steps.scripts.outputs.has_typecheck }}
+          HB: ${{ steps.scripts.outputs.has_build }}
           RL: ${{ inputs.run-lint }}
           RT: ${{ inputs.run-test }}
           RC: ${{ inputs.run-typecheck }}
+          RB: ${{ inputs.run-build }}
         run: |
           skipped=()
           [ "$RL" = "true" ] && [ "$HL" = "false" ] && skipped+=("lint(no '${{ inputs.script-lint }}' script)")
           [ "$RT" = "true" ] && [ "$HT" = "false" ] && skipped+=("test(no '${{ inputs.script-test }}' script)")
           [ "$RC" = "true" ] && [ "$HC" = "false" ] && skipped+=("typecheck(no '${{ inputs.script-typecheck }}' script)")
+          [ "$RB" = "true" ] && [ "$HB" = "false" ] && skipped+=("build(no '${{ inputs.script-build }}' script)")
           if [ ${#skipped[@]} -gt 0 ]; then
             echo "::notice::Skipped: ${skipped[*]}"
           fi

@@ -6,12 +6,18 @@ extension publishing, and anything else that recurs.
 
 ## Workflows
 
-### `node-test.yml` — Node.js lint / typecheck / test
+### `node-test.yml` — Node.js lint / typecheck / test / build
 
-Reusable workflow that installs dependencies and runs `lint`, `typecheck`,
-and `test` package.json scripts (skipping any that don't exist). Auto-
-detects the package manager from the lockfile (pnpm > yarn > bun > npm)
-and supports an explicit override. Defaults to Node 24.
+Reusable workflow that installs dependencies and runs `lint`,
+`typecheck`, `test`, and (opt-in) `build` package.json scripts —
+skipping any that don't exist with a notice. Auto-detects the package
+manager from the lockfile (pnpm > yarn > bun > npm) and supports an
+explicit override. Defaults to Node 24.
+
+Pass `with: run-build: true` for projects (e.g. browser extensions)
+where the build itself is the most useful PR-time check; that way the
+PR-time `tests.yml` shim subsumes what a separate `build.yml` would
+have done.
 
 ### `python-test.yml` — Python ruff + pytest
 
@@ -34,6 +40,22 @@ header (the older `.retry_after` JSON-body pattern is wrong), uses the
 multipart-split pattern for `release_notes` (AMO rejects translatable
 fields combined with multipart source uploads), and the same
 deterministic stagger.
+
+### `dependabot-auto-merge.yml` — auto-merge Dependabot PRs
+
+Reusable workflow that merges a Dependabot PR after Claude (or any
+trusted reviewer) approves it. Two modes:
+
+- `mode: auto` (default) — calls `gh pr merge --auto`. Pair with a
+  `pull_request_review` trigger in your shim. Requires GitHub's
+  auto-merge feature (Pro+ for private repos, Free only for public).
+- `mode: direct` — calls `gh pr merge` immediately after CI succeeds.
+  Pair with a `workflow_run` trigger watching your CI workflow. For
+  Free private repos where `--auto` isn't available (see
+  `github-private-repo-auto-merge-workaround` skill).
+
+Auto-detects the merge method from the repo's allowed methods (priority:
+squash > rebase > merge); override via `merge-method:`.
 
 ### `claude-code-review.yml` — automatic PR review
 

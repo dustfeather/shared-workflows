@@ -1,0 +1,91 @@
+name: Dependabot auto-merge (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: |
+          How to merge. "auto" (default) calls `gh pr merge --auto` —
+          requires GitHub's auto-merge feature to be enabled (Pro+ for
+          private repos, Free only for public). Pair with the
+          `pull_request_review` trigger in your shim. "direct" merges
+          immediately after CI succeeds — for repos where auto-merge
+          isn't available (Free private, see
+          github-private-repo-auto-merge-workaround skill). Pair with the
+          `workflow_run` trigger watching your CI workflow.
+        type: string
+        default: auto
+      merge-method:
+        description: |
+          "auto" (default) detects the first allowed merge method on the
+          repo (priority: squash > rebase > merge). Override with
+          "squash", "rebase", or "merge" to force a specific method.
+        type: string
+        default: auto
+
+permissions:
+  contents: read
+
+jobs:
+  merge:
+    # Trusted-trigger gate: depending on the caller's trigger, verify the
+    # PR is actually a Dependabot-authored one and (for the direct path)
+    # the upstream CI succeeded.
+    if: |
+      (github.event_name == 'pull_request_review' &&
+        github.event.review.state == 'approved' &&
+        github.event.pull_request.user.login == 'dependabot[bot]') ||
+      (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.event == 'pull_request' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.actor.login == 'dependabot[bot]')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          MODE: ${{ inputs.mode }}
+          MERGE_METHOD_INPUT: ${{ inputs.merge-method }}
+        run: |
+          set -u
+
+          # Resolve merge method
+          if [ "$MERGE_METHOD_INPUT" = "auto" ]; then
+            methods=$(gh api "/repos/$REPO" --jq '
+              (if .allow_squash_merge then "--squash " else "" end) +
+              (if .allow_rebase_merge then "--rebase " else "" end) +
+              (if .allow_merge_commit then "--merge " else "" end)
+            ')
+            method=$(echo "$methods" | awk '{print $1}')
+            if [ -z "$method" ]; then
+              echo "::error::No merge method enabled on $REPO"
+              exit 1
+            fi
+          else
+            method="--$MERGE_METHOD_INPUT"
+          fi
+          echo "Merge method: $method"
+
+          # Resolve PR URL based on trigger event
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            BRANCH="${{ github.event.workflow_run.head_branch }}"
+            PR_URL=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url --jq '.[0].url // empty')
+            if [ -z "$PR_URL" ]; then
+              echo "No open PR for branch $BRANCH; nothing to merge"
+              exit 0
+            fi
+          else
+            PR_URL="${{ github.event.pull_request.html_url }}"
+          fi
+          echo "PR: $PR_URL"
+
+          # Merge
+          if [ "$MODE" = "direct" ]; then
+            gh pr merge "$PR_URL" "$method" --delete-branch
+          else
+            gh pr merge --auto "$method" "$PR_URL"
+          fi
