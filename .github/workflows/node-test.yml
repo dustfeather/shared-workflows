@@ -1,0 +1,162 @@
+name: Node test (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: Node.js version to set up
+        type: string
+        default: "24"
+      package-manager:
+        description: Package manager to use. "auto" detects from lockfile (pnpm > yarn > bun > npm).
+        type: string
+        default: auto
+      pnpm-version:
+        description: pnpm major version (used only when package-manager resolves to pnpm)
+        type: string
+        default: "10"
+      working-dir:
+        description: Directory containing package.json
+        type: string
+        default: "."
+      script-lint:
+        description: package.json script name for lint
+        type: string
+        default: lint
+      script-test:
+        description: package.json script name for tests
+        type: string
+        default: test
+      script-typecheck:
+        description: package.json script name for type-checking
+        type: string
+        default: typecheck
+      run-lint:
+        type: boolean
+        default: true
+      run-test:
+        type: boolean
+        default: true
+      run-typecheck:
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-dir }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Detect package manager
+        id: pm
+        env:
+          PM_INPUT: ${{ inputs.package-manager }}
+        run: |
+          if [ "$PM_INPUT" != "auto" ]; then
+            echo "pm=$PM_INPUT" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if   [ -f pnpm-lock.yaml ]; then echo "pm=pnpm" >> "$GITHUB_OUTPUT"
+          elif [ -f yarn.lock ];      then echo "pm=yarn" >> "$GITHUB_OUTPUT"
+          elif [ -f bun.lock ] || [ -f bun.lockb ]; then echo "pm=bun" >> "$GITHUB_OUTPUT"
+          else                              echo "pm=npm"  >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.pm.outputs.pm == 'pnpm'
+        uses: pnpm/action-setup@v6
+        with:
+          version: ${{ inputs.pnpm-version }}
+
+      - if: steps.pm.outputs.pm == 'bun'
+        uses: oven-sh/setup-bun@v2
+
+      # setup-node `cache` accepts npm/yarn/pnpm but not bun. Skip cache for bun.
+      - if: steps.pm.outputs.pm != 'bun'
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ steps.pm.outputs.pm }}
+      - if: steps.pm.outputs.pm == 'bun'
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Install dependencies
+        run: |
+          case "${{ steps.pm.outputs.pm }}" in
+            pnpm) pnpm install --frozen-lockfile ;;
+            npm)  npm ci ;;
+            yarn) yarn install --frozen-lockfile ;;
+            bun)  bun install --frozen-lockfile ;;
+          esac
+
+      - name: Detect which scripts exist in package.json
+        id: scripts
+        env:
+          LINT: ${{ inputs.script-lint }}
+          TEST: ${{ inputs.script-test }}
+          TC:   ${{ inputs.script-typecheck }}
+        run: |
+          has() { jq -e --arg s "$1" '.scripts[$s] // empty' package.json >/dev/null 2>&1 && echo true || echo false; }
+          echo "has_lint=$(has "$LINT")"            >> "$GITHUB_OUTPUT"
+          echo "has_test=$(has "$TEST")"            >> "$GITHUB_OUTPUT"
+          echo "has_typecheck=$(has "$TC")"         >> "$GITHUB_OUTPUT"
+
+      - if: inputs.run-lint && steps.scripts.outputs.has_lint == 'true'
+        name: Lint
+        env: { PM: "${{ steps.pm.outputs.pm }}", SCRIPT: "${{ inputs.script-lint }}" }
+        run: |
+          case "$PM" in
+            pnpm) pnpm run "$SCRIPT" ;;
+            npm)  npm run "$SCRIPT" ;;
+            yarn) yarn run "$SCRIPT" ;;
+            bun)  bun run "$SCRIPT" ;;
+          esac
+
+      - if: inputs.run-typecheck && steps.scripts.outputs.has_typecheck == 'true'
+        name: Type-check
+        env: { PM: "${{ steps.pm.outputs.pm }}", SCRIPT: "${{ inputs.script-typecheck }}" }
+        run: |
+          case "$PM" in
+            pnpm) pnpm run "$SCRIPT" ;;
+            npm)  npm run "$SCRIPT" ;;
+            yarn) yarn run "$SCRIPT" ;;
+            bun)  bun run "$SCRIPT" ;;
+          esac
+
+      - if: inputs.run-test && steps.scripts.outputs.has_test == 'true'
+        name: Test
+        env: { PM: "${{ steps.pm.outputs.pm }}", SCRIPT: "${{ inputs.script-test }}" }
+        run: |
+          case "$PM" in
+            pnpm) pnpm run "$SCRIPT" ;;
+            npm)  npm run "$SCRIPT" ;;
+            yarn) yarn run "$SCRIPT" ;;
+            bun)  bun run "$SCRIPT" ;;
+          esac
+
+      - name: Summary of skipped steps
+        if: always()
+        env:
+          HL: ${{ steps.scripts.outputs.has_lint }}
+          HT: ${{ steps.scripts.outputs.has_test }}
+          HC: ${{ steps.scripts.outputs.has_typecheck }}
+          RL: ${{ inputs.run-lint }}
+          RT: ${{ inputs.run-test }}
+          RC: ${{ inputs.run-typecheck }}
+        run: |
+          skipped=()
+          [ "$RL" = "true" ] && [ "$HL" = "false" ] && skipped+=("lint(no '${{ inputs.script-lint }}' script)")
+          [ "$RT" = "true" ] && [ "$HT" = "false" ] && skipped+=("test(no '${{ inputs.script-test }}' script)")
+          [ "$RC" = "true" ] && [ "$HC" = "false" ] && skipped+=("typecheck(no '${{ inputs.script-typecheck }}' script)")
+          if [ ${#skipped[@]} -gt 0 ]; then
+            echo "::notice::Skipped: ${skipped[*]}"
+          fi

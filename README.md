@@ -6,6 +6,18 @@ extension publishing, and anything else that recurs.
 
 ## Workflows
 
+### `node-test.yml` — Node.js lint / typecheck / test
+
+Reusable workflow that installs dependencies and runs `lint`, `typecheck`,
+and `test` package.json scripts (skipping any that don't exist). Auto-
+detects the package manager from the lockfile (pnpm > yarn > bun > npm)
+and supports an explicit override. Defaults to Node 24.
+
+### `python-test.yml` — Python ruff + pytest
+
+Reusable workflow for ruff lint, ruff format check, and pytest. Defaults
+to Python 3.14.
+
 ### `publish-chrome.yml` — Chrome Web Store publish
 
 Reusable workflow for releasing browser extensions to the Chrome Web
