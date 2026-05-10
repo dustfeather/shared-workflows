@@ -34,6 +34,17 @@ on:
       run-tests:
         type: boolean
         default: true
+      run-mypy:
+        description: |
+          Run `mypy` against `mypy-paths`. Defaults off because mypy is not
+          universal — opt in per-repo when the project has it configured.
+          mypy must be installed via the dev requirements.
+        type: boolean
+        default: false
+      mypy-paths:
+        description: Paths passed to `mypy`
+        type: string
+        default: "src/"
 
 permissions:
   contents: read
@@ -78,6 +89,10 @@ jobs:
       - if: inputs.run-format-check
         name: ruff format --check
         run: ruff format --check ${{ inputs.lint-paths }}
+
+      - if: inputs.run-mypy
+        name: mypy
+        run: mypy ${{ inputs.mypy-paths }}
 
       - if: inputs.run-tests
         name: pytest
