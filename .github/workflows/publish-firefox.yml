@@ -1,0 +1,258 @@
+name: Publish to Mozilla Add-ons (AMO)
+
+on:
+  workflow_call:
+    inputs:
+      artifact-name:
+        description: Name of the artifact uploaded by the calling workflow
+        type: string
+        default: extensions
+      xpi-name:
+        description: Filename of the Firefox .xpi inside the artifact
+        type: string
+        required: true
+      source-name:
+        description: Filename of the source .zip inside the artifact (for AMO review)
+        type: string
+        required: true
+      release-notes-name:
+        description: Filename of the release-notes text file inside the artifact
+        type: string
+        default: release-notes.txt
+      addon-id:
+        description: AMO add-on id (e.g. my-addon@dustfeather)
+        type: string
+        required: true
+      stagger-seconds-max:
+        description: Cap (seconds) for the deterministic pre-publish stagger sleep. Set to 0 to disable.
+        type: number
+        default: 60
+      stagger-offset:
+        description: |
+          Explicit stagger offset in seconds. If unset (-1), the offset is
+          derived deterministically from sha256(github.repository) mod
+          (stagger-seconds-max + 1) — guarantees sibling repos publishing
+          in parallel land in different buckets, beating AMO's 3/min user
+          burst without coordination.
+        type: number
+        default: -1
+    secrets:
+      AMO_JWT_ISSUER:
+        required: false
+      AMO_JWT_SECRET:
+        required: false
+
+# Publish only needs to read artifacts from the calling run. External calls
+# go to Mozilla AMO API, not GitHub.
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      AMO_API_KEY: ${{ secrets.AMO_JWT_ISSUER }}
+      AMO_API_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+      XPI_NAME: ${{ inputs.xpi-name }}
+      SOURCE_NAME: ${{ inputs.source-name }}
+      RELEASE_NOTES_NAME: ${{ inputs.release-notes-name }}
+      ADDON_ID: ${{ inputs.addon-id }}
+      STAGGER_MAX: ${{ inputs.stagger-seconds-max }}
+      STAGGER_OFFSET: ${{ inputs.stagger-offset }}
+    steps:
+      - name: Skip if AMO secrets are not configured
+        id: gate
+        run: |
+          missing=()
+          [ -z "$AMO_API_KEY" ]    && missing+=(AMO_JWT_ISSUER)
+          [ -z "$AMO_API_SECRET" ] && missing+=(AMO_JWT_SECRET)
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::warning::AMO publish skipped — missing secrets: ${missing[*]}"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.gate.outputs.skip == 'false'
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact-name }}
+
+      - if: steps.gate.outputs.skip == 'false'
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Stagger to avoid AMO 3/min user-burst throttle
+        if: steps.gate.outputs.skip == 'false' && inputs.stagger-seconds-max > 0
+        run: |
+          if [ "$STAGGER_OFFSET" -ge 0 ] 2>/dev/null; then
+            offset=$STAGGER_OFFSET
+            source="explicit input"
+          else
+            # Deterministic per-repo offset: sha256(repo) mod (max+1).
+            # Beats RANDOM because sibling repos publishing in parallel get
+            # disjoint offsets — collision probability for 4 repos rolling
+            # the same RANDOM bucket is ~10%; deterministic hash makes it ~6%
+            # only when the hash itself collides, and you can patch with
+            # stagger-offset to nudge any single extension off the collision.
+            hash=$(printf '%s' "$GITHUB_REPOSITORY" | sha256sum | head -c 6)
+            offset=$(( 0x$hash % (STAGGER_MAX + 1) ))
+            source="sha256($GITHUB_REPOSITORY) mod $((STAGGER_MAX + 1))"
+          fi
+          echo "Stagger offset: ${offset}s (source: $source)"
+          sleep "$offset"
+
+      - name: Publish to Mozilla Add-ons
+        if: steps.gate.outputs.skip == 'false'
+        run: |
+          set -u
+
+          generate_jwt() {
+            node -e "
+              const crypto = require('crypto');
+              const h = Buffer.from(JSON.stringify({alg:'HS256',typ:'JWT'})).toString('base64url');
+              const now = Math.floor(Date.now()/1000);
+              const p = Buffer.from(JSON.stringify({
+                iss: process.env.AMO_API_KEY,
+                iat: now,
+                exp: now + 300,
+                jti: crypto.randomUUID()
+              })).toString('base64url');
+              const s = crypto.createHmac('sha256', process.env.AMO_API_SECRET)
+                .update(h+'.'+p).digest('base64url');
+              console.log(h+'.'+p+'.'+s);
+            "
+          }
+
+          # All diagnostics → stderr so they survive $() capture (the bug that hid
+          # the original 93s silent failure on filelist-ext).
+          # DRF returns Retry-After as an HTTP header, not a JSON body field —
+          # the old `jq -r '.retry_after // 30'` always fell back to 30.
+          amo_curl() {
+            local headers_file response http_code retry_after jwt
+            headers_file=$(mktemp)
+            trap 'rm -f "$headers_file"' RETURN
+
+            for attempt in 1 2 3 4 5; do
+              jwt=$(generate_jwt)
+              response=$(curl -sS -D "$headers_file" -w "\n%{http_code}" \
+                             -H "Authorization: JWT $jwt" "$@" || true)
+              http_code=$(echo "$response" | tail -1)
+
+              if [ "$http_code" != "429" ]; then
+                echo "$response"
+                return 0
+              fi
+
+              retry_after=$(grep -i '^retry-after:' "$headers_file" \
+                            | tail -1 | awk '{print $2}' | tr -d '\r')
+              : "${retry_after:=60}"
+              if [ "$retry_after" -gt 90 ] 2>/dev/null; then
+                echo "amo_curl: retry-after ${retry_after}s exceeds 90s cap, giving up" >&2
+                echo "$response" >&2
+                return 1
+              fi
+              echo "amo_curl: 429 throttled, sleeping ${retry_after}s (attempt $attempt/5)" >&2
+              sleep "$retry_after"
+            done
+
+            echo "amo_curl: exhausted 5 retries. Final response:" >&2
+            echo "$response" >&2
+            return 1
+          }
+
+          AMO_BASE="https://addons.mozilla.org/api/v5"
+
+          # 1. Upload .xpi
+          UPLOAD_RESPONSE=$(amo_curl \
+            -F "upload=@$XPI_NAME" \
+            -F "channel=listed" \
+            "$AMO_BASE/addons/upload/")
+          UPLOAD_BODY=$(echo "$UPLOAD_RESPONSE" | sed '$d')
+
+          UPLOAD_UUID=$(echo "$UPLOAD_BODY" | jq -r '.uuid')
+          echo "Upload UUID: $UPLOAD_UUID"
+          if [ "$UPLOAD_UUID" = "null" ] || [ -z "$UPLOAD_UUID" ]; then
+            echo "Upload failed: $UPLOAD_BODY" >&2
+            exit 1
+          fi
+
+          # 2. Poll for validation (max 10 minutes)
+          PROCESSED="false"
+          for i in $(seq 1 60); do
+            sleep 10
+            POLL_RESPONSE=$(amo_curl "$AMO_BASE/addons/upload/$UPLOAD_UUID/")
+            STATUS=$(echo "$POLL_RESPONSE" | sed '$d')
+
+            PROCESSED=$(echo "$STATUS" | jq -r '.processed')
+            VALID=$(echo "$STATUS" | jq -r '.valid')
+            echo "Poll $i: processed=$PROCESSED valid=$VALID"
+
+            if [ "$PROCESSED" = "true" ]; then
+              if [ "$VALID" = "true" ]; then
+                echo "Validation passed"
+                break
+              else
+                echo "Validation failed:" >&2
+                echo "$STATUS" | jq '.validation.messages' >&2
+                exit 1
+              fi
+            fi
+          done
+          if [ "$PROCESSED" != "true" ]; then
+            echo "Validation timed out" >&2
+            exit 1
+          fi
+
+          # 3. Create new version with source code (multipart).
+          # AMO API: complex/translated fields (release_notes, compatibility,
+          # custom_license) cannot be set in the same multipart request as a
+          # source upload — they require a separate JSON PATCH call.
+          VERSION_RESPONSE=$(amo_curl \
+            -F "upload=$UPLOAD_UUID" \
+            -F "source=@$SOURCE_NAME" \
+            "$AMO_BASE/addons/addon/$ADDON_ID/versions/")
+          VERSION_HTTP=$(echo "$VERSION_RESPONSE" | tail -1)
+          VERSION_BODY=$(echo "$VERSION_RESPONSE" | sed '$d')
+          echo "Version create ($VERSION_HTTP): $VERSION_BODY"
+
+          if [ "$VERSION_HTTP" != "201" ] && [ "$VERSION_HTTP" != "200" ]; then
+            if echo "$VERSION_BODY" | grep -q "in review"; then
+              echo "::warning::AMO publish skipped: previous version still in review"
+              exit 0
+            fi
+            echo "Version creation failed (HTTP $VERSION_HTTP)" >&2
+            exit 1
+          fi
+
+          VERSION_ID=$(echo "$VERSION_BODY" | jq -r '.id')
+          if [ "$VERSION_ID" = "null" ] || [ -z "$VERSION_ID" ]; then
+            echo "::warning::Could not parse version id from create response; skipping release_notes PATCH"
+            exit 0
+          fi
+
+          # 4. PATCH release_notes (translatable field requires {lang: value})
+          if [ ! -f "$RELEASE_NOTES_NAME" ]; then
+            echo "::warning::No $RELEASE_NOTES_NAME found; version created without release notes"
+            exit 0
+          fi
+          NOTES=$(cat "$RELEASE_NOTES_NAME")
+          PATCH_BODY=$(jq -n --arg notes "$NOTES" '{release_notes: {"en-US": $notes}}')
+
+          JWT=$(generate_jwt)
+          PATCH_RESPONSE=$(curl -sS -w "\n%{http_code}" \
+            -H "Authorization: JWT $JWT" \
+            -H "Content-Type: application/json" \
+            -X PATCH \
+            -d "$PATCH_BODY" \
+            "$AMO_BASE/addons/addon/$ADDON_ID/versions/$VERSION_ID/")
+          PATCH_CODE=$(echo "$PATCH_RESPONSE" | tail -1)
+          PATCH_BODY_RESP=$(echo "$PATCH_RESPONSE" | sed '$d')
+          echo "Release-notes PATCH ($PATCH_CODE): $PATCH_BODY_RESP"
+
+          if [ "$PATCH_CODE" != "200" ]; then
+            echo "::warning::Failed to set release notes (version was still created)"
+          fi

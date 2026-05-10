@@ -1,13 +1,27 @@
 # shared-workflows
 
-General-purpose reusable GitHub Actions workflows for cross-cutting CI.
-Currently centralizes Claude Code review across every repo so the prompt,
-trusted-actor gate, and tool allowlist are fixed in one place.
-
-For browser-extension publishing (Chrome Web Store + Mozilla Add-ons), see
-the separate `dustfeather/extension-workflows` repo.
+Reusable GitHub Actions workflows for cross-cutting CI across every repo
+under this account. One source of truth for Claude Code review, browser-
+extension publishing, and anything else that recurs.
 
 ## Workflows
+
+### `publish-chrome.yml` — Chrome Web Store publish
+
+Reusable workflow for releasing browser extensions to the Chrome Web
+Store. Handles 429 + 5xx retries (with `Retry-After` honored), parses
+`uploadState` and `status[]` body fields (HTTP 200 + `uploadState:
+FAILURE` is a real silent-failure mode in naive code), staggers parallel
+releases deterministically by repo hash, and skip-with-warning when
+secrets are missing.
+
+### `publish-firefox.yml` — Mozilla Add-ons (AMO) publish
+
+Same shape as Chrome but for AMO. Honors the actual `Retry-After` HTTP
+header (the older `.retry_after` JSON-body pattern is wrong), uses the
+multipart-split pattern for `release_notes` (AMO rejects translatable
+fields combined with multipart source uploads), and the same
+deterministic stagger.
 
 ### `claude-code-review.yml` — automatic PR review
 
@@ -108,3 +122,37 @@ jobs:
 Callers pin to `@v1` (the moving major-version tag, GitHub Actions
 convention). Backwards-compatible improvements move `v1` forward;
 breaking changes (new required inputs, changed defaults) bump to `v2`.
+
+## Extension publishing usage
+
+For each browser-extension repo's `release.yml` (after a `build` job that
+uploads an artifact named `extensions` containing the packaged `.zip`,
+`.xpi`, source `.zip`, and `release-notes.txt`):
+
+```yaml
+publish-chrome:
+  needs: build
+  uses: dustfeather/shared-workflows/.github/workflows/publish-chrome.yml@v1
+  with:
+    zip-name: my-ext-chrome-${{ needs.build.outputs.tag }}.zip
+  secrets: inherit
+
+publish-firefox:
+  needs: build
+  uses: dustfeather/shared-workflows/.github/workflows/publish-firefox.yml@v1
+  with:
+    xpi-name: my-ext-firefox-${{ needs.build.outputs.tag }}.xpi
+    source-name: source-${{ needs.build.outputs.tag }}.zip
+    addon-id: my-ext@dustfeather
+  secrets: inherit
+```
+
+`secrets: inherit` passes through `CHROME_*` and `AMO_*` secrets from the
+calling repo. If a repo doesn't have a given store's secrets configured,
+the matching publish job emits a `::warning::` and exits 0 cleanly.
+
+## History
+
+This repo subsumes the earlier `dustfeather/extension-workflows` (which
+was extension-publish-only). All publish workflows now live here so
+there's one home for shared CI.

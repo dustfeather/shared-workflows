@@ -1,0 +1,222 @@
+name: Publish to Chrome Web Store
+
+on:
+  workflow_call:
+    inputs:
+      artifact-name:
+        description: Name of the artifact uploaded by the calling workflow that contains the .zip
+        type: string
+        default: extensions
+      zip-name:
+        description: Filename of the Chrome .zip inside the artifact
+        type: string
+        required: true
+      stagger-seconds-max:
+        description: Cap (seconds) for the deterministic pre-publish stagger sleep. Set to 0 to disable.
+        type: number
+        default: 30
+      stagger-offset:
+        description: |
+          Explicit stagger offset in seconds. If unset (-1), the offset is
+          derived deterministically from sha256(github.repository) mod
+          (stagger-seconds-max + 1) — guarantees sibling repos publishing
+          in parallel land in different buckets.
+        type: number
+        default: -1
+    secrets:
+      CHROME_CLIENT_ID:
+        required: false
+      CHROME_CLIENT_SECRET:
+        required: false
+      CHROME_REFRESH_TOKEN:
+        required: false
+      CHROME_EXTENSION_ID:
+        required: false
+
+# Publish only needs to read artifacts from the calling run (which is
+# `actions: read` only when downloading across runs — same-run artifacts
+# need no special perm). External calls go to Google APIs, not GitHub.
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+      CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+      CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+      CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+      ZIP_NAME: ${{ inputs.zip-name }}
+      STAGGER_MAX: ${{ inputs.stagger-seconds-max }}
+      STAGGER_OFFSET: ${{ inputs.stagger-offset }}
+    steps:
+      - name: Skip if Chrome Web Store secrets are not configured
+        id: gate
+        run: |
+          missing=()
+          [ -z "$CHROME_CLIENT_ID" ]     && missing+=(CHROME_CLIENT_ID)
+          [ -z "$CHROME_CLIENT_SECRET" ] && missing+=(CHROME_CLIENT_SECRET)
+          [ -z "$CHROME_REFRESH_TOKEN" ] && missing+=(CHROME_REFRESH_TOKEN)
+          [ -z "$CHROME_EXTENSION_ID" ]  && missing+=(CHROME_EXTENSION_ID)
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::warning::Chrome Web Store publish skipped — missing secrets: ${missing[*]}"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.gate.outputs.skip == 'false'
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact-name }}
+
+      - name: Stagger to avoid parallel-release quota collisions
+        if: steps.gate.outputs.skip == 'false' && inputs.stagger-seconds-max > 0
+        run: |
+          if [ "$STAGGER_OFFSET" -ge 0 ] 2>/dev/null; then
+            offset=$STAGGER_OFFSET
+            source="explicit input"
+          else
+            # Deterministic per-repo offset: sha256(repo) mod (max+1).
+            # Beats RANDOM because sibling repos publishing in parallel get
+            # disjoint offsets (RANDOM can roll the same bucket).
+            hash=$(printf '%s' "$GITHUB_REPOSITORY" | sha256sum | head -c 6)
+            offset=$(( 0x$hash % (STAGGER_MAX + 1) ))
+            source="sha256($GITHUB_REPOSITORY) mod $((STAGGER_MAX + 1))"
+          fi
+          echo "Stagger offset: ${offset}s (source: $source)"
+          sleep "$offset"
+
+      - name: Publish to Chrome Web Store
+        if: steps.gate.outputs.skip == 'false'
+        run: |
+          set -u
+
+          # All diagnostics go to stderr so they survive $() capture in callers.
+          # Retries cover 429 (Retry-After honored) and 5xx (exponential backoff).
+          gws_curl() {
+            local headers_file response http_code retry_after sleep_for
+            headers_file=$(mktemp)
+            trap 'rm -f "$headers_file"' RETURN
+
+            local backoff=10
+            for attempt in 1 2 3 4 5; do
+              response=$(curl -sS -D "$headers_file" -w "\n%{http_code}" \
+                             -H "Authorization: Bearer $ACCESS_TOKEN" \
+                             -H "x-goog-api-version: 2" \
+                             "$@" || true)
+              http_code=$(echo "$response" | tail -1)
+
+              case "$http_code" in
+                429)
+                  retry_after=$(grep -i '^retry-after:' "$headers_file" \
+                                | tail -1 | awk '{print $2}' | tr -d '\r')
+                  : "${retry_after:=$backoff}"
+                  if [ "$retry_after" -gt 90 ] 2>/dev/null; then
+                    echo "gws_curl: retry-after ${retry_after}s exceeds 90s cap, giving up" >&2
+                    echo "$response" >&2
+                    return 1
+                  fi
+                  echo "gws_curl: 429 throttled, sleeping ${retry_after}s (attempt $attempt/5)" >&2
+                  sleep "$retry_after"
+                  ;;
+                500|502|503|504)
+                  echo "gws_curl: HTTP $http_code, sleeping ${backoff}s (attempt $attempt/5)" >&2
+                  sleep "$backoff"
+                  backoff=$(( backoff * 2 ))
+                  ;;
+                *)
+                  echo "$response"
+                  return 0
+                  ;;
+              esac
+            done
+
+            echo "gws_curl: exhausted 5 retries. Final response:" >&2
+            echo "$response" >&2
+            return 1
+          }
+
+          # OAuth: refresh-token grant. Token TTL is 1 hour, plenty for retries.
+          TOKEN_RESPONSE=$(curl -sS -X POST https://oauth2.googleapis.com/token \
+            -d "client_id=$CHROME_CLIENT_ID" \
+            -d "client_secret=$CHROME_CLIENT_SECRET" \
+            -d "refresh_token=$CHROME_REFRESH_TOKEN" \
+            -d "grant_type=refresh_token")
+          ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token')
+          if [ "$ACCESS_TOKEN" = "null" ] || [ -z "$ACCESS_TOKEN" ]; then
+            echo "Failed to get access token" >&2
+            echo "$TOKEN_RESPONSE" >&2
+            exit 1
+          fi
+
+          # Upload .zip
+          UPLOAD_RESPONSE=$(gws_curl \
+            -X PUT \
+            -T "$ZIP_NAME" \
+            "https://www.googleapis.com/upload/chromewebstore/v1.1/items/$CHROME_EXTENSION_ID")
+          UPLOAD_HTTP=$(echo "$UPLOAD_RESPONSE" | tail -1)
+          UPLOAD_BODY=$(echo "$UPLOAD_RESPONSE" | sed '$d')
+          echo "Upload ($UPLOAD_HTTP): $UPLOAD_BODY"
+
+          if [ "$UPLOAD_HTTP" != "200" ]; then
+            echo "Upload HTTP $UPLOAD_HTTP" >&2
+            exit 1
+          fi
+
+          # HTTP 200 + uploadState=FAILURE is a real-world failure mode: must check the body.
+          UPLOAD_STATE=$(echo "$UPLOAD_BODY" | jq -r '.uploadState // "UNKNOWN"')
+          case "$UPLOAD_STATE" in
+            SUCCESS) ;;
+            IN_PROGRESS)
+              echo "Upload still IN_PROGRESS after PUT — Chrome Web Store didn't finish processing in time" >&2
+              echo "$UPLOAD_BODY" >&2
+              exit 1
+              ;;
+            FAILURE)
+              echo "Upload reported FAILURE:" >&2
+              echo "$UPLOAD_BODY" | jq '.itemError // .' >&2
+              exit 1
+              ;;
+            *)
+              echo "Unexpected uploadState: $UPLOAD_STATE" >&2
+              echo "$UPLOAD_BODY" >&2
+              exit 1
+              ;;
+          esac
+
+          # Publish
+          PUBLISH_RESPONSE=$(gws_curl \
+            -H "Content-Length: 0" \
+            -X POST \
+            "https://www.googleapis.com/chromewebstore/v1.1/items/$CHROME_EXTENSION_ID/publish")
+          PUBLISH_HTTP=$(echo "$PUBLISH_RESPONSE" | tail -1)
+          PUBLISH_BODY=$(echo "$PUBLISH_RESPONSE" | sed '$d')
+          echo "Publish ($PUBLISH_HTTP): $PUBLISH_BODY"
+
+          if [ "$PUBLISH_HTTP" != "200" ]; then
+            if echo "$PUBLISH_BODY" | grep -q "ITEM_PENDING_REVIEW\|in review"; then
+              echo "::warning::Chrome Web Store publish skipped: item is still in review"
+              exit 0
+            fi
+            echo "Publish HTTP $PUBLISH_HTTP" >&2
+            exit 1
+          fi
+
+          # HTTP 200 with non-OK status[] also happens; parse the array.
+          STATUS_JOIN=$(echo "$PUBLISH_BODY" | jq -r '.status | join(",")')
+          case "$STATUS_JOIN" in
+            OK) ;;
+            *ITEM_PENDING_REVIEW*)
+              echo "::warning::Chrome Web Store publish skipped: item is still in review (status=$STATUS_JOIN)"
+              exit 0
+              ;;
+            *)
+              echo "Publish returned non-OK status=$STATUS_JOIN" >&2
+              echo "$PUBLISH_BODY" | jq '.statusDetail // .' >&2
+              exit 1
+              ;;
+          esac
