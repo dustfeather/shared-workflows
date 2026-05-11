@@ -59,15 +59,19 @@ squash > rebase > merge); override via `merge-method:`.
 
 ### Recommended PR-checks shape
 
-For the cleanest gate (review skipped if tests/build/CodeQL fail), each
-caller combines `node-test.yml` + `claude-code-review.yml` into one
-workflow with `needs:` ordering:
+For the cleanest gate (review skipped if tests/build/CodeQL fail, and
+in-flight reviews cancelled when the PR closes/merges), each caller
+combines `node-test.yml` + `claude-code-review.yml` into one workflow
+with `needs:` ordering, the `closed` trigger, and per-job `if:` gates:
 
 ```yaml
 name: PR checks
 on:
   pull_request:
-    types: [opened, synchronize]
+    # `closed` is here so a merge fires a same-concurrency-group run that
+    # cancels the in-flight one (cancel-in-progress: true). The new run
+    # itself does no work — both jobs skip via the if: gate below.
+    types: [opened, synchronize, reopened, closed]
     paths-ignore:
       - '.github/workflows/pr-checks.yml'
 
@@ -78,11 +82,13 @@ concurrency:
 
 jobs:
   tests:
+    if: github.event.action != 'closed'
     permissions: { contents: read }
     uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v1
     with:
       run-build: true   # extension repos / projects with a meaningful build script
   review:
+    if: github.event.action != 'closed'
     needs: tests   # review skips if tests fail
     permissions:
       contents: read
@@ -97,6 +103,10 @@ jobs:
 workflow itself adds a cheap bash gate that skips when CodeQL has
 already failed (no agent spin-up, no Claude tokens) — treating
 IN_PROGRESS as "proceed" so reviews aren't blocked waiting for CodeQL.
+Adding `closed` to the trigger types + the `if: != 'closed'` gates on
+each job means a PR being merged or closed mid-review cancels the
+in-flight run via the shared concurrency group — no Claude tokens
+spent on a review whose PR is no longer open.
 
 ### `claude-code-review.yml` — automatic PR review
 
