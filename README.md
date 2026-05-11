@@ -57,6 +57,47 @@ trusted reviewer) approves it. Two modes:
 Auto-detects the merge method from the repo's allowed methods (priority:
 squash > rebase > merge); override via `merge-method:`.
 
+### Recommended PR-checks shape
+
+For the cleanest gate (review skipped if tests/build/CodeQL fail), each
+caller combines `node-test.yml` + `claude-code-review.yml` into one
+workflow with `needs:` ordering:
+
+```yaml
+name: PR checks
+on:
+  pull_request:
+    types: [opened, synchronize]
+    paths-ignore:
+      - '.github/workflows/pr-checks.yml'
+
+permissions: { contents: read }
+concurrency:
+  group: pr-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    permissions: { contents: read }
+    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v1
+    with:
+      run-build: true   # extension repos / projects with a meaningful build script
+  review:
+    needs: tests   # review skips if tests fail
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      id-token: write
+    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v1
+    secrets: inherit  # use explicit pass for cross-owner — see "Cross-owner callers"
+```
+
+`needs: tests` gates review on tests/build passing. The central review
+workflow itself adds a cheap bash gate that skips when CodeQL has
+already failed (no agent spin-up, no Claude tokens) — treating
+IN_PROGRESS as "proceed" so reviews aren't blocked waiting for CodeQL.
+
 ### `claude-code-review.yml` — automatic PR review
 
 Runs Claude Code Action on every PR (after a trusted-actor / allowed-bot

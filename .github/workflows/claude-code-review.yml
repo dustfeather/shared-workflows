@@ -45,12 +45,38 @@ jobs:
       issues: read
       id-token: write
     steps:
+      - name: Skip if CodeQL has already failed for this PR
+        # Cheap bash gate — no agent spin-up if CodeQL is red. Treats
+        # IN_PROGRESS / no-result as "proceed" so we don't block reviews
+        # waiting for CodeQL on every PR. Combined with the caller's
+        # `needs: tests`, this means review only runs on PRs where both
+        # tests and CodeQL are passing-or-still-running.
+        id: codeql_gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -u
+          checks=$(gh pr checks "$PR" --repo "$REPO" --json name,state 2>/dev/null || echo "[]")
+          codeql_failed=$(echo "$checks" | jq -r '
+            [.[] | select(.name | test("CodeQL"; "i"))
+                 | select(.state == "FAILURE")] | length')
+          if [ "${codeql_failed:-0}" -gt 0 ]; then
+            echo "::warning::Skipping review: CodeQL failed on this PR"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout repository
+        if: steps.codeql_gate.outputs.skip != 'true'
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
       - name: Run Claude Code Review
+        if: steps.codeql_gate.outputs.skip != 'true'
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
