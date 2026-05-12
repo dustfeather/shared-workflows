@@ -43,3 +43,10 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Match the reusable review job: Opus 4.7, high effort, adaptive
+          # thinking. A comment like "@claude review" lands here (interactive
+          # mode), not in the auto-review workflow, so it gets the same depth.
+          claude_args: >-
+            --model claude-opus-4-7
+            --effort high
+            --thinking adaptive

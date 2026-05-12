@@ -109,4 +109,13 @@ jobs:
               - Submit a top-level review summary with `gh pr review --comment --body "..."`. Do NOT auto-approve human PRs.
 
             Be terse. No emoji. No filler.
-          claude_args: '--allowed-tools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr review:*),Bash(gh pr comment:*),Bash(gh api:*)"'
+          # Opus 4.7 + high effort + adaptive thinking: code review is a
+          # judgment-heavy, low-volume, short-output task — spend on the better
+          # reasoner. `high` (not `max`) keeps it from deprioritizing the
+          # decision rules above; adaptive is required on 4.7 and gives
+          # interleaved thinking between the gh tool calls.
+          claude_args: >-
+            --model claude-opus-4-7
+            --effort high
+            --thinking adaptive
+            --allowed-tools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr review:*),Bash(gh pr comment:*),Bash(gh api:*)"
