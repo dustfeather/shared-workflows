@@ -258,8 +258,28 @@ jobs:
 ## Versioning
 
 Callers pin to `@v1` (the moving major-version tag, GitHub Actions
-convention). Backwards-compatible improvements move `v1` forward;
-breaking changes (new required inputs, changed defaults) bump to `v2`.
+convention). Every push to `main` is auto-tagged by
+`.github/workflows/tag-release.yml`: by default it bumps the **patch**
+component by one (wrapping at 100 into minor, and minor into major — the
+version is essentially a base-100 commit counter), and it re-points the
+floating `vN` tag at the new commit. To request a larger bump for a given
+commit, put a token in that commit's subject line — `#minor` or `#major`
+(largest wins; `#patch` is the explicit form of the default).
+
+Pick the bump by what changes for **callers** of these reusable workflows:
+
+| Bump | Token | When | Caller impact |
+|---|---|---|---|
+| **patch** | _(default, or `#patch`)_ | Bug fix in a workflow; doc-only change; internal refactor; bumping an action used *inside* a workflow with no interface change; log/wording tweaks. | None — `@v1` callers get it automatically, nothing to do. |
+| **minor** | `#minor` | Backwards-compatible feature: a new **optional** input (with a default), a brand-new workflow, a new opt-in job/step, broadened behavior that callers don't have to react to. | None required; new capability is available if they want it. |
+| **major** | `#major` | Breaking change to a workflow's contract: removing/renaming an input or secret, adding a **required** input, changing a default in a way callers must account for, requiring callers to grant new permissions, removing a workflow, renaming a job output. | **Callers on `@v1` would break.** A `#major` bump rolls the version to `vN+1`; update the README usage examples and tell callers to re-pin to `@vN+1`. |
+
+Rule of thumb: if a caller's shim workflow could keep working untouched →
+patch or minor; if it couldn't → major. When unsure, prefer the larger bump.
+
+Note: the token match is a fixed-string search of the commit subject, so
+don't write `#major`/`#minor` verbatim in a commit message unless you mean
+it (e.g. say "the major token" rather than the literal string).
 
 ## Extension publishing usage
 
