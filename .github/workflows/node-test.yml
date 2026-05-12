@@ -52,6 +52,22 @@ on:
           where the build itself is the most useful PR-time check.
         type: boolean
         default: false
+      run-audit:
+        description: |
+          Run a dependency vulnerability audit (`npm audit` / `pnpm audit` /
+          `yarn audit` / `bun audit`, picked to match the detected package
+          manager) and fail the job — and therefore anything gated on it via
+          `needs:` (a deploy, a publish) — when a vulnerability at or above
+          `audit-level` is present. On by default.
+        type: boolean
+        default: true
+      audit-level:
+        description: |
+          Minimum severity that fails the audit: low | moderate | high |
+          critical. Default high — moderate/low advisories (often in
+          transitive dev deps with no fix available) don't block deploys.
+        type: string
+        default: high
 
 permissions:
   contents: read
@@ -108,6 +124,38 @@ jobs:
             npm)  npm ci ;;
             yarn) yarn install --frozen-lockfile ;;
             bun)  bun install --frozen-lockfile ;;
+          esac
+
+      - if: inputs.run-audit
+        name: Audit dependencies
+        env:
+          PM: ${{ steps.pm.outputs.pm }}
+          LEVEL: ${{ inputs.audit-level }}
+        run: |
+          set -u
+          case "$PM" in
+            npm)  npm audit --audit-level="$LEVEL" ;;
+            pnpm) pnpm audit --audit-level "$LEVEL" ;;
+            bun)  bun audit --audit-level "$LEVEL" ;;
+            yarn)
+              if yarn --version | grep -q '^1\.'; then
+                # Yarn Classic's `yarn audit` exit code is a severity
+                # bitmask (1 info, 2 low, 4 moderate, 8 high, 16 critical),
+                # OR-ed together — nonzero even for advisories below LEVEL.
+                # Re-derive pass/fail from the bits at/above LEVEL.
+                yarn audit --level "$LEVEL"; code=$?
+                case "$LEVEL" in
+                  low)      mask=30 ;;  # 2|4|8|16
+                  moderate) mask=28 ;;  # 4|8|16
+                  high)     mask=24 ;;  # 8|16
+                  critical) mask=16 ;;
+                  *)        mask=24 ;;  # treat unknown as "high"
+                esac
+                if [ $((code & mask)) -ne 0 ]; then exit 1; fi
+              else
+                yarn npm audit --severity "$LEVEL" --all
+              fi
+              ;;
           esac
 
       - name: Detect which scripts exist in package.json
