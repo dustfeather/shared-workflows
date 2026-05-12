@@ -1,0 +1,36 @@
+name: Tag release
+
+# Every push to main cuts a new vX.Y.0 tag (minor bump by default; put
+# `#patch` or `#major` in the commit message to override) and force-moves
+# the floating `v1` tag to it, so callers on `@v1` always track main.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+# Serialize: two quick merges must not both read "latest = vX.Y.0" and
+# race to create the same next tag.
+concurrency: tag-release
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Compute and push next tag
+        id: bump
+        uses: anothrNick/github-tag-action@1.75.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BUMP: minor
+          WITH_V: true
+
+      - name: Move floating v1 to the new tag
+        run: |
+          git tag -f v1 "${{ steps.bump.outputs.new_tag }}"
+          git push -f origin v1
