@@ -29,6 +29,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEFAULT_BUMP: minor
           WITH_V: true
+          # Override the bump-trigger tokens so an ordinary commit message
+          # (or a quoted changelog) can't accidentally request a bump. Use
+          # the bracketed forms in a commit subject to override the default.
+          MAJOR_STRING_TOKEN: "[major]"
+          MINOR_STRING_TOKEN: "[minor]"
+          PATCH_STRING_TOKEN: "[patch]"
+          NONE_STRING_TOKEN: "[no-release]"
 
       - name: Move floating v1 to the new tag
         run: |
