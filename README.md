@@ -6,13 +6,21 @@ extension publishing, and anything else that recurs.
 
 ## Workflows
 
-### `node-test.yml` — Node.js lint / typecheck / test / build
+### `node-test.yml` — Node.js audit / lint / typecheck / test / build
 
 Reusable workflow that installs dependencies and runs `lint`,
 `typecheck`, `test`, and (opt-in) `build` package.json scripts —
 skipping any that don't exist with a notice. Auto-detects the package
 manager from the lockfile (pnpm > yarn > bun > npm) and supports an
 explicit override. Defaults to Node 24.
+
+It also runs a dependency vulnerability audit (`npm audit` / `pnpm
+audit` / `yarn audit` / `bun audit`, matched to the detected package
+manager) — **on by default**, failing at `audit-level: high` or worse,
+so anything gated on this job via `needs:` (a deploy, a publish) won't
+ship on a high/critical advisory. Tune with `with: audit-level: …`
+(`low`/`moderate`/`high`/`critical`) or turn it off with `with:
+run-audit: false`.
 
 Pass `with: run-build: true` for projects (e.g. browser extensions)
 where the build itself is the most useful PR-time check; that way the
