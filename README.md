@@ -260,11 +260,12 @@ jobs:
 Callers pin to `@v1` (the moving major-version tag, GitHub Actions
 convention). Every push to `main` is auto-tagged by
 `.github/workflows/tag-release.yml`: by default it bumps the **patch**
-component by one (wrapping at 100 into minor, and minor into major — the
-version is essentially a base-100 commit counter), and it re-points the
-floating `vN` tag at the new commit. To request a larger bump for a given
-commit, put a token in that commit's subject line — `#minor` or `#major`
-(largest wins; `#patch` is the explicit form of the default).
+component by one (wrapping at 100 into minor; minor grows without bound),
+and it re-points the floating `vN` tag at the new commit. **major is never
+bumped automatically** — a major bump can break `@vN` callers, so it only
+happens when you ask for it. To request a larger bump for a given commit,
+put a token in that commit's subject line — `#minor` or `#major` (largest
+wins; `#patch` is the explicit form of the default).
 
 Pick the bump by what changes for **callers** of these reusable workflows:
 

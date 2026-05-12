@@ -6,15 +6,15 @@ name: Tag release
 # Versioning scheme (mechanical, NOT semver — but you can override per commit):
 #
 #   Default (no token in the commit subject):
-#     patch += 1; when patch would hit 100 it wraps to 0 and minor += 1;
-#     when minor would hit 100 it wraps to 0 and major += 1. Each component
-#     stays in 0..99 — the version is just a base-100 commit counter.
+#     patch += 1; when patch would hit 100 it wraps to 0 and minor += 1.
+#     minor grows without bound — major is NEVER bumped automatically,
+#     because a major bump can break `@vN` callers.
 #
 #   Manual override — put one of these tokens in the HEAD commit's subject
 #   line when you want a bigger bump for the use case at hand:
-#     #major  -> major += 1, minor = 0, patch = 0
-#     #minor  -> minor += 1, patch = 0   (same 100-wrap to major applies)
-#     #patch  -> patch += 1              (identical to the default; explicit)
+#     #major  -> major += 1, minor = 0, patch = 0   (deliberate only)
+#     #minor  -> minor += 1, patch = 0
+#     #patch  -> patch += 1                          (identical to default)
 #   If several appear, the largest wins. The match is a fixed-string search
 #   of the HEAD commit message only, so a token mentioned in an older commit
 #   won't affect anything — but don't write these tokens verbatim in a commit
@@ -63,9 +63,8 @@ jobs:
             minor) minor=$((minor + 1)); patch=0 ;;
             patch) patch=$((patch + 1)) ;;
           esac
-          # Carry at 100 (applies to the auto increment and to #minor/#patch).
+          # Patch wraps at 100 into minor. Minor is NOT capped — never auto-bump major.
           if [ "$patch" -ge 100 ]; then patch=0; minor=$((minor + 1)); fi
-          if [ "$minor" -ge 100 ]; then minor=0; major=$((major + 1)); fi
 
           echo "tag=v${major}.${minor}.${patch}" >> "$GITHUB_OUTPUT"
           echo "major=v${major}" >> "$GITHUB_OUTPUT"
