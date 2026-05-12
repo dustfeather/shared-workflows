@@ -1,13 +1,24 @@
 name: Tag release
 
-# Every push to main bumps the version by one and re-points the floating
-# major tag (v1, v2, ...) at the new commit so `@v1` callers track main.
+# Every push to main bumps the version and re-points the floating major tag
+# (v1, v2, ...) at the new commit so `@v1` callers track main.
 #
-# Versioning scheme (NOT semver-by-commit-message — purely mechanical):
-#   patch += 1 on every commit; when patch would hit 100 it wraps to 0 and
-#   minor += 1; when minor would hit 100 it wraps to 0 and major += 1.
-#   So each component stays in 0..99 and the version is just a base-100
-#   commit counter.
+# Versioning scheme (mechanical, NOT semver — but you can override per commit):
+#
+#   Default (no token in the commit subject):
+#     patch += 1; when patch would hit 100 it wraps to 0 and minor += 1;
+#     when minor would hit 100 it wraps to 0 and major += 1. Each component
+#     stays in 0..99 — the version is just a base-100 commit counter.
+#
+#   Manual override — put one of these tokens in the HEAD commit's subject
+#   line when you want a bigger bump for the use case at hand:
+#     #major  -> major += 1, minor = 0, patch = 0
+#     #minor  -> minor += 1, patch = 0   (same 100-wrap to major applies)
+#     #patch  -> patch += 1              (identical to the default; explicit)
+#   If several appear, the largest wins. The match is a fixed-string search
+#   of the HEAD commit message only, so a token mentioned in an older commit
+#   won't affect anything — but don't write these tokens verbatim in a commit
+#   subject unless you mean them.
 on:
   push:
     branches: [main]
@@ -32,14 +43,30 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --tags --force --quiet
+
           # Highest existing vX.Y.Z tag (the bare floating "v1" has no dots so
           # the glob skips it; "^{}" derefs never appear in `git tag -l`).
           latest=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sed 's/^v//' | sort -V | tail -1)
           latest=${latest:-0.0.0}
           IFS=. read -r major minor patch <<<"$latest"
-          patch=$((patch + 1))
+
+          # Manual override token in the HEAD commit subject (fixed-string match).
+          msg=$(git log -1 --format='%s%n%b' HEAD)
+          if   printf '%s' "$msg" | grep -Fq '#major'; then bump=major
+          elif printf '%s' "$msg" | grep -Fq '#minor'; then bump=minor
+          else bump=patch
+          fi
+          echo "Bump: $bump (from v${major}.${minor}.${patch})"
+
+          case "$bump" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+          # Carry at 100 (applies to the auto increment and to #minor/#patch).
           if [ "$patch" -ge 100 ]; then patch=0; minor=$((minor + 1)); fi
           if [ "$minor" -ge 100 ]; then minor=0; major=$((major + 1)); fi
+
           echo "tag=v${major}.${minor}.${patch}" >> "$GITHUB_OUTPUT"
           echo "major=v${major}" >> "$GITHUB_OUTPUT"
           echo "Next version: v${major}.${minor}.${patch} (floating tag v${major})"
