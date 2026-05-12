@@ -1,8 +1,13 @@
 name: Tag release
 
-# Every push to main cuts a new vX.Y.0 tag (minor bump by default; put
-# `#patch` or `#major` in the commit message to override) and force-moves
-# the floating `v1` tag to it, so callers on `@v1` always track main.
+# Every push to main bumps the version by one and re-points the floating
+# major tag (v1, v2, ...) at the new commit so `@v1` callers track main.
+#
+# Versioning scheme (NOT semver-by-commit-message — purely mechanical):
+#   patch += 1 on every commit; when patch would hit 100 it wraps to 0 and
+#   minor += 1; when minor would hit 100 it wraps to 0 and major += 1.
+#   So each component stays in 0..99 and the version is just a base-100
+#   commit counter.
 on:
   push:
     branches: [main]
@@ -10,8 +15,8 @@ on:
 permissions:
   contents: write
 
-# Serialize: two quick merges must not both read "latest = vX.Y.0" and
-# race to create the same next tag.
+# Serialize: two quick merges must not both read the same "latest" tag and
+# race to create the same next one.
 concurrency: tag-release
 
 jobs:
@@ -22,22 +27,30 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Compute and push next tag
-        id: bump
-        uses: anothrNick/github-tag-action@1.75.0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Patch by default; put the action's default tokens (the hashtag
-          # forms) in a commit subject to request a bigger bump. Do NOT use
-          # bracketed tokens here -- the action matches them with a bash
-          # `case` glob, where [ ] are character-class metacharacters, so
-          # `[major]` would match almost any commit message. Keep the default
-          # tokens (no glob metachars) and just don't write them verbatim in
-          # ordinary commit messages.
-          DEFAULT_BUMP: patch
-          WITH_V: true
-
-      - name: Move floating v1 to the new tag
+      - name: Compute next version
+        id: ver
         run: |
-          git tag -f v1 "${{ steps.bump.outputs.new_tag }}"
-          git push -f origin v1
+          set -euo pipefail
+          git fetch --tags --force --quiet
+          # Highest existing vX.Y.Z tag (the bare floating "v1" has no dots so
+          # the glob skips it; "^{}" derefs never appear in `git tag -l`).
+          latest=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sed 's/^v//' | sort -V | tail -1)
+          latest=${latest:-0.0.0}
+          IFS=. read -r major minor patch <<<"$latest"
+          patch=$((patch + 1))
+          if [ "$patch" -ge 100 ]; then patch=0; minor=$((minor + 1)); fi
+          if [ "$minor" -ge 100 ]; then minor=0; major=$((major + 1)); fi
+          echo "tag=v${major}.${minor}.${patch}" >> "$GITHUB_OUTPUT"
+          echo "major=v${major}" >> "$GITHUB_OUTPUT"
+          echo "Next version: v${major}.${minor}.${patch} (floating tag v${major})"
+
+      - name: Create and push tags
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+          MAJOR: ${{ steps.ver.outputs.major }}
+        run: |
+          set -euo pipefail
+          git tag "$TAG"
+          git tag -f "$MAJOR"
+          git push origin "$TAG"
+          git push -f origin "$MAJOR"
