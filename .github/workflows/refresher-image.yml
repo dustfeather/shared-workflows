@@ -1,0 +1,51 @@
+name: Build refresher image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "k8s/ghcr-pull-refresher/image/**"
+      - ".github/workflows/refresher-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # Built on GitHub-hosted, not on the ARC pool: this image is the
+    # bootstrap dependency for the ARC pool's image-pull credential, so
+    # if it broke and we tried to rebuild it on the same pool, the
+    # rebuild pod itself could fail to pull.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/ghcr-pull-refresher
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: k8s/ghcr-pull-refresher/image
+          file: k8s/ghcr-pull-refresher/image/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:sha-${{ github.sha }}
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
