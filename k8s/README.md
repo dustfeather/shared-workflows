@@ -10,9 +10,21 @@ lives here too.
   from the `github-app-dustfeather` App every 30 minutes and writes it
   to `arc-runners/ghcr-pull`. Lets the runner image stay **private**
   (the App, not a human PAT, owns the credential lifecycle).
+- `ghcr-pull-refresher/image/` — Dockerfile for the refresher's own
+  runtime image (`ghcr.io/dustfeather/ghcr-pull-refresher`). Built by
+  `.github/workflows/refresher-image.yml`. Kept **public** because it
+  bootstraps the pull credential and so cannot itself rely on it.
 - `runner-scale-set-image-override.yaml` — Helm values overlay that
   points an `gha-runner-scale-set` release at the pre-baked image and
   attaches the `ghcr-pull` secret.
+
+### Why a custom refresher image
+
+The arc-runners namespace's pods have no egress to alpine's CDN
+(`dl-cdn.alpinelinux.org`) or `dl.k8s.io` — Cloudflare WARP / Mesh
+filtering blocks them. So `apk add openssl curl jq kubectl` at runtime
+is not viable, and there is no public off-the-shelf image that ships
+all four. The Dockerfile is ~20 lines.
 
 ## Prerequisite — GitHub App permission
 

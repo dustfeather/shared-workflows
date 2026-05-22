@@ -34,10 +34,12 @@ spec:
               value: "true"
           containers:
             - name: refresher
-              # `alpine/k8s` ships kubectl + curl + jq + openssl + base64.
-              # Pin to a recent stable; bump in lockstep with the
-              # cluster's kubectl skew window.
-              image: alpine/k8s:1.32.0
+              # Minimal image baked from `k8s/ghcr-pull-refresher/image/`.
+              # Bundles openssl + curl + jq + kubectl; built and pushed
+              # by `.github/workflows/refresher-image.yml`. Public on
+              # GHCR so it can be pulled without the very credential
+              # this CronJob produces.
+              image: ghcr.io/dustfeather/ghcr-pull-refresher:latest
               imagePullPolicy: IfNotPresent
               command: ["/scripts/refresh.sh"]
               resources:
