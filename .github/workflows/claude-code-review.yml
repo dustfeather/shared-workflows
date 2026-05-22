@@ -23,6 +23,23 @@ on:
           reviews are auditable.
         type: boolean
         default: true
+      path-to-bun:
+        description: |
+          Absolute path to a pre-installed Bun binary on the runner. When
+          set, claude-code-action skips its own Bun install step. Use this
+          when running on the pre-baked `actions-runner-claude` image
+          (default `/usr/local/bin/bun`). Leave empty on stock runners.
+        type: string
+        default: ""
+      path-to-claude:
+        description: |
+          Absolute path to a pre-installed Claude Code CLI binary on the
+          runner. When set, claude-code-action skips its own install step.
+          Use this when running on the pre-baked `actions-runner-claude`
+          image (default `/usr/local/bin/claude`). Leave empty on stock
+          runners.
+        type: string
+        default: ""
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -82,6 +99,8 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allowed_bots: ${{ inputs.allowed-bots }}
           show_full_output: ${{ inputs.show-full-output }}
+          path_to_bun_executable: ${{ inputs.path-to-bun }}
+          path_to_claude_code_executable: ${{ inputs.path-to-claude }}
           prompt: |
             Review pull request #${{ github.event.pull_request.number }} in ${{ github.repository }}.
 
