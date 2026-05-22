@@ -1,0 +1,33 @@
+# Helm values override to point an `gha-runner-scale-set` release at the
+# pre-baked actions-runner-claude image AND attach the GHCR pull secret.
+#
+# Apply per release:
+#
+#   helm -n arc-runners upgrade --reuse-values <release> \
+#       oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set \
+#       --version 0.14.1 \
+#       -f k8s/runner-scale-set-image-override.yaml
+#
+# `--reuse-values` keeps the existing release values (App secret name,
+# config URL, maxRunners, etc.) and merges these on top.
+#
+# Why only the `runner` container is set here: the chart's
+# `dind-init-container` helper auto-derives the `init-dind-externals`
+# initContainer's image from the `runner` container's image (it scans
+# `.Values.template.spec.containers` for `name: runner` and reuses its
+# `image` field). Setting `initContainers` here would NOT replace the
+# chart-injected `init-dind-externals` — the chart APPENDS user
+# `initContainers` to its own — so any explicit init-dind-externals
+# block here would duplicate it.
+#
+# `imagePullSecrets` at `template.spec.imagePullSecrets` flows through
+# the chart's generic key-passthrough (everything under
+# `template.spec.*` except `containers`, `volumes`, `initContainers`,
+# `serviceAccountName` is passed verbatim into the pod spec).
+template:
+  spec:
+    imagePullSecrets:
+      - name: ghcr-pull
+    containers:
+      - name: runner
+        image: ghcr.io/dustfeather/actions-runner-claude:latest
