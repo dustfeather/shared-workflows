@@ -1,0 +1,79 @@
+# Refresh script as a ConfigMap so the CronJob can mount it as a file
+# without baking a custom image. Runs inside `alpine/k8s` (which carries
+# `kubectl`, `curl`, `jq`, `openssl`, `base64`).
+#
+# What it does:
+#   1. Mints a GitHub App JWT (RS256, 9-minute validity) using the
+#      `github-app-dustfeather` Secret's private key + app id.
+#   2. Exchanges the JWT for a 1-hour App installation token via
+#      `POST /app/installations/{id}/access_tokens`.
+#   3. Encodes that token into a `kubernetes.io/dockerconfigjson` Secret
+#      for `ghcr.io` and applies it as `arc-runners/ghcr-pull`.
+#
+# Expected GitHub App permissions on the App side: `Packages: Read`. If
+# the App lacks that permission the token mints fine but `docker pull`
+# returns 403. There is no way to detect this from the token itself —
+# verify by attempting a pull (see README).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ghcr-pull-refresher-script
+  namespace: arc-runners
+data:
+  refresh.sh: |
+    #!/bin/sh
+    set -eu
+
+    APP_SECRET_DIR="${APP_SECRET_DIR:-/var/run/secrets/github-app}"
+    APP_ID="$(cat "$APP_SECRET_DIR/github_app_id")"
+    INSTALL_ID="$(cat "$APP_SECRET_DIR/github_app_installation_id")"
+    PRIVATE_KEY="$APP_SECRET_DIR/github_app_private_key"
+
+    NAMESPACE="${PULL_SECRET_NAMESPACE:-arc-runners}"
+    SECRET_NAME="${PULL_SECRET_NAME:-ghcr-pull}"
+
+    # URL-safe base64 with no padding (JWT spec).
+    b64url() { base64 -w0 | tr '+/' '-_' | tr -d '='; }
+
+    now=$(date -u +%s)
+    iat=$((now - 60))
+    # GitHub caps App JWT validity at 10 minutes; use 9.
+    exp=$((now + 540))
+
+    header=$(printf '{"alg":"RS256","typ":"JWT"}' | b64url)
+    payload=$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' "$iat" "$exp" "$APP_ID" | b64url)
+    signing_input="$header.$payload"
+    sig=$(printf '%s' "$signing_input" \
+      | openssl dgst -sha256 -sign "$PRIVATE_KEY" -binary \
+      | b64url)
+    jwt="$signing_input.$sig"
+
+    resp=$(curl -fsS \
+      -X POST \
+      -H "Authorization: Bearer $jwt" \
+      -H "Accept: application/vnd.github+json" \
+      -H "X-GitHub-Api-Version: 2022-11-28" \
+      "https://api.github.com/app/installations/${INSTALL_ID}/access_tokens")
+
+    token=$(printf '%s' "$resp" | jq -r .token)
+    expires=$(printf '%s' "$resp" | jq -r .expires_at)
+    if [ -z "$token" ] || [ "$token" = "null" ]; then
+      echo "ERROR: failed to mint installation token" >&2
+      printf '%s\n' "$resp" >&2
+      exit 1
+    fi
+
+    # dockerconfigjson layout: {"auths":{"ghcr.io":{"auth":"<base64(user:token)>"}}}
+    auth=$(printf 'x-access-token:%s' "$token" | base64 -w0)
+    config=$(printf '{"auths":{"ghcr.io":{"auth":"%s"}}}' "$auth")
+
+    # `create --dry-run=client -o yaml | apply -f -` is the
+    # canonical idempotent upsert for a typed Secret.
+    kubectl create secret generic "$SECRET_NAME" \
+      --namespace "$NAMESPACE" \
+      --type=kubernetes.io/dockerconfigjson \
+      --from-literal=.dockerconfigjson="$config" \
+      --dry-run=client -o yaml \
+      | kubectl apply -f -
+
+    echo "OK: refreshed ${NAMESPACE}/${SECRET_NAME}, token expires_at=${expires}"

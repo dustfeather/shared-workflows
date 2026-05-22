@@ -1,0 +1,39 @@
+# ServiceAccount + Role + RoleBinding for the CronJob that refreshes the
+# `arc-runners/ghcr-pull` Secret. Scoped to the `arc-runners` namespace
+# only — the refresher has no business reading/writing anything outside
+# its own Secret.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ghcr-pull-refresher
+  namespace: arc-runners
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ghcr-pull-refresher
+  namespace: arc-runners
+rules:
+  # `create` cannot be scoped to a specific resourceName. The named-secret
+  # update path is the second rule below.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["ghcr-pull"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ghcr-pull-refresher
+  namespace: arc-runners
+subjects:
+  - kind: ServiceAccount
+    name: ghcr-pull-refresher
+    namespace: arc-runners
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ghcr-pull-refresher
