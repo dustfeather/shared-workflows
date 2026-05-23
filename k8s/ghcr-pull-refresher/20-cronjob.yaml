@@ -24,6 +24,14 @@ spec:
         spec:
           serviceAccountName: ghcr-pull-refresher
           restartPolicy: OnFailure
+          # Pin to the same node the ARC runner pods land on. The
+          # cluster's WSL2 node has broken cross-node pod networking
+          # (see existing skill: k3s-worker-on-wsl2-mirrored-networking-
+          # cross-node-broken), so a refresher that lands on `wsl` can't
+          # reach CoreDNS on `asus-laptop`. Co-scheduling with the
+          # runners also keeps the credential lifecycle on the same box.
+          nodeSelector:
+            kubernetes.io/hostname: acer-laptop
           # Same toleration as the runner pods so the refresher can land
           # on the same node pool. `ephemeral=true:NoSchedule` is the
           # arc-runners convention; harmless if no nodes have it.
@@ -76,6 +84,11 @@ spec:
             - name: app-secret
               secret:
                 secretName: github-app-dustfeather
-                defaultMode: 0o400
+                # 0o444 (world-readable) is required because the
+                # container runs as UID 65532 (image USER directive)
+                # while secret files are owned by root. The default
+                # 0o644 would also work; 0o444 is the tighter form
+                # that drops write for everyone.
+                defaultMode: 0o444
             - name: tmp
               emptyDir: {}
