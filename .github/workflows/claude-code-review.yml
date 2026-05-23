@@ -40,6 +40,16 @@ on:
           runners.
         type: string
         default: ""
+      runner:
+        description: |
+          Label (or labels) for the runner pool. Defaults to GitHub-hosted
+          `ubuntu-latest`. Set to a self-hosted ARC scale-set label (e.g.
+          `arc-df`, `arc-itguys-ro`, `arc-itguys-ro-degoog-infra`) when
+          using `path-to-bun` / `path-to-claude` against the pre-baked
+          `actions-runner-claude` image — those binary paths only exist
+          on that image.
+        type: string
+        default: "ubuntu-latest"
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -55,7 +65,7 @@ jobs:
     if: |
       contains(format(',{0},', inputs.trusted-actors), format(',{0},', github.actor)) ||
       contains(format(',{0},', inputs.allowed-bots), format(',{0},', github.actor))
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     permissions:
       contents: read
       pull-requests: write
