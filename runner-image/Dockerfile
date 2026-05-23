@@ -10,6 +10,12 @@
 #   - Node.js (NodeSource major release)
 #   - Bun pinned to the version anthropics/claude-code-action@v1 expects
 #   - @anthropic-ai/claude-code globally (Claude Code CLI)
+#   - Pre-warmed Bun install cache for anthropics/claude-code-action@v1's
+#     own runtime deps (~140 packages incl. @anthropic-ai/claude-agent-sdk,
+#     @modelcontextprotocol/sdk, octokit), so the per-job
+#     `cd $GITHUB_ACTION_PATH && bun install --production` it runs resolves
+#     from /home/runner/.bun/install/cache (~1-2 s) instead of downloading
+#     (~20 s).
 #
 # Wired into the review workflow via `path_to_bun_executable` and
 # `path_to_claude_code_executable`, so the action skips its own Bun and
@@ -65,3 +71,20 @@ RUN set -eux; \
     claude --version
 
 USER runner
+
+# Pre-warm Bun's install cache with claude-code-action@v1's runtime deps so
+# the action's per-job `bun install --production` (run inside
+# $GITHUB_ACTION_PATH) resolves from local cache (~1-2 s) instead of
+# downloading ~140 packages (~20 s). Cache lives at
+# /home/runner/.bun/install/cache and persists in this image layer; the
+# ephemeral action checkout dir is discarded but the resolved packages
+# stay in cache for the next job.
+#
+# If claude-code-action@v1 bumps any of its deps after this layer is
+# built, the per-job install just downloads the deltas — still much
+# faster than the cold install.
+RUN set -eux; \
+    git clone --depth=1 --branch v1 https://github.com/anthropics/claude-code-action.git /tmp/cca; \
+    cd /tmp/cca; \
+    bun install --production; \
+    rm -rf /tmp/cca
