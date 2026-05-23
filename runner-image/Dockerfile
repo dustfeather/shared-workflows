@@ -10,6 +10,10 @@
 #   - Node.js (NodeSource major release)
 #   - Bun pinned to the version anthropics/claude-code-action@v1 expects
 #   - @anthropic-ai/claude-code globally (Claude Code CLI)
+#   - Python 3 + pip, with the `jsonschema` library globally installed
+#     (used by dustfeather/dustfeather's refresh-badges workflow; cheap
+#     enough to keep in the shared image so any future Python-using
+#     workflow gets it for free).
 #   - Pre-warmed Bun install cache for anthropics/claude-code-action@v1's
 #     own runtime deps (~140 packages incl. @anthropic-ai/claude-agent-sdk,
 #     @modelcontextprotocol/sdk, octokit), so the per-job
@@ -36,11 +40,14 @@ ARG NODE_MAJOR=22
 # System packages: jq for the CodeQL gate's response parsing, gh for the
 # review tools the action invokes, plus the usual curl/ca-certificates
 # bootstrap. NodeSource provides a recent Node runtime so the global npm
-# install of @anthropic-ai/claude-code works.
+# install of @anthropic-ai/claude-code works. python3 + pip are added for
+# any workflow that needs a one-off script runtime (no system jsonschema
+# package on Debian 12 newer than 4.10, so we install via pip below).
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
-        ca-certificates curl gnupg jq unzip; \
+        ca-certificates curl gnupg jq unzip \
+        python3 python3-pip; \
     install -m 0755 -d /etc/apt/keyrings; \
     curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
         -o /etc/apt/keyrings/githubcli-archive-keyring.gpg; \
@@ -49,7 +56,13 @@ RUN set -eux; \
         > /etc/apt/sources.list.d/github-cli.list; \
     curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash -; \
     apt-get install -y --no-install-recommends gh nodejs; \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/*; \
+    if [ ! -e /usr/local/bin/python ] && [ -e /usr/bin/python3 ]; then \
+        ln -s /usr/bin/python3 /usr/local/bin/python; \
+    fi; \
+    if [ ! -e /usr/local/bin/pip ] && [ -e /usr/bin/pip3 ]; then \
+        ln -s /usr/bin/pip3 /usr/local/bin/pip; \
+    fi
 
 # Bun. The official installer drops to ~/.bun; move into /usr/local/bin so
 # it lives on PATH for both root and the `runner` user with no shell rc
@@ -69,6 +82,19 @@ RUN set -eux; \
         ln -s /usr/bin/claude /usr/local/bin/claude; \
     fi; \
     claude --version
+
+# Python libraries used by reusable workflows. Keep this list small and
+# justified — every entry blows up image size for every runner pull.
+# jsonschema is consumed by dustfeather/dustfeather's refresh-badges
+# renderer; --break-system-packages is required because Debian 12 ships
+# Python under PEP 668 (externally-managed-environment). This is safe
+# inside an ephemeral runner image where there is no system Python user
+# to disturb.
+ARG JSONSCHEMA_VERSION=4.23.0
+RUN set -eux; \
+    python -m pip install --no-cache-dir --break-system-packages \
+        "jsonschema==${JSONSCHEMA_VERSION}"; \
+    python -c "import jsonschema, sys; print('jsonschema', jsonschema.__version__)"
 
 USER runner
 
