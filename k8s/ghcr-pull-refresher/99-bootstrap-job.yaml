@@ -23,6 +23,10 @@ spec:
     spec:
       serviceAccountName: ghcr-pull-refresher
       restartPolicy: OnFailure
+      # Pin to the runner node — see CronJob comment. Bootstrap on the
+      # wrong node hits the WSL2 cross-node networking bug.
+      nodeSelector:
+        kubernetes.io/hostname: acer-laptop
       tolerations:
         - effect: NoSchedule
           key: ephemeral
@@ -67,6 +71,9 @@ spec:
         - name: app-secret
           secret:
             secretName: github-app-dustfeather
-            defaultMode: 0o400
+            # 0o444: world-readable, no write. Container runs as
+            # UID 65532 while secret files are owned by root, so the
+            # default 0o400 (owner-only) gives permission-denied.
+            defaultMode: 0o444
         - name: tmp
           emptyDir: {}
