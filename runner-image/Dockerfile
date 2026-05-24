@@ -10,10 +10,11 @@
 #   - Node.js (NodeSource major release)
 #   - Bun pinned to the version anthropics/claude-code-action@v1 expects
 #   - @anthropic-ai/claude-code globally (Claude Code CLI)
-#   - Python 3 + pip, with the `jsonschema` library globally installed
-#     (used by dustfeather/dustfeather's refresh-badges workflow; cheap
-#     enough to keep in the shared image so any future Python-using
-#     workflow gets it for free).
+#   - Python 3 + pip, with `jsonschema`, `PyJWT`, and `cryptography`
+#     globally installed (jsonschema is used by dustfeather/dustfeather's
+#     refresh-badges workflow; PyJWT+cryptography cover GitHub App / JWT
+#     signing flows from Python — cheap enough to keep in the shared
+#     image so any future Python-using workflow gets them for free).
 #   - Pre-warmed Bun install cache for anthropics/claude-code-action@v1's
 #     own runtime deps (~140 packages incl. @anthropic-ai/claude-agent-sdk,
 #     @modelcontextprotocol/sdk, octokit), so the per-job
@@ -96,11 +97,18 @@ RUN set -eux; \
 # Python under PEP 668 (externally-managed-environment). This is safe
 # inside an ephemeral runner image where there is no system Python user
 # to disturb.
-ARG JSONSCHEMA_VERSION=4.23.0
+ARG JSONSCHEMA_VERSION=4.26.0
+ARG PYJWT_VERSION=2.13.0
+ARG CRYPTOGRAPHY_VERSION=48.0.0
 RUN set -eux; \
     python -m pip install --no-cache-dir --break-system-packages \
-        "jsonschema==${JSONSCHEMA_VERSION}"; \
-    python -c "import jsonschema, sys; print('jsonschema', jsonschema.__version__)"
+        "jsonschema==${JSONSCHEMA_VERSION}" \
+        "PyJWT==${PYJWT_VERSION}" \
+        "cryptography==${CRYPTOGRAPHY_VERSION}"; \
+    python -c "import jsonschema, jwt, cryptography; \
+print('jsonschema', jsonschema.__version__); \
+print('PyJWT', jwt.__version__); \
+print('cryptography', cryptography.__version__)"
 
 USER runner
 
