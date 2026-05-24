@@ -37,6 +37,12 @@ USER root
 ARG BUN_VERSION=1.3.14
 ARG NODE_MAJOR=22
 
+# Force GitHub Actions runner to execute JavaScript actions on Node 24
+# instead of the action's declared `runs.using` runtime (node16/node20).
+# Set at image level so every job using this runner inherits it without
+# per-workflow plumbing.
+ENV FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true
+
 # System packages: jq for the CodeQL gate's response parsing, gh for the
 # review tools the action invokes, plus the usual curl/ca-certificates
 # bootstrap. NodeSource provides a recent Node runtime so the global npm
