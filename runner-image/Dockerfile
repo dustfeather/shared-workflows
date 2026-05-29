@@ -119,18 +119,31 @@ RUN set -eux; \
 # Python under PEP 668 (externally-managed-environment). This is safe
 # inside an ephemeral runner image where there is no system Python user
 # to disturb.
+#
+# --ignore-installed is required because the upstream actions-runner base
+# now preinstalls some of these (e.g. PyJWT) as dpkg-managed Debian
+# packages with no pip RECORD file. Without it, pip tries to uninstall the
+# Debian copy first and dies with "Cannot uninstall PyJWT x.y.z, RECORD
+# file not found. Hint: The package was installed by debian." With it, pip
+# installs the pinned versions into /usr/local/lib/.../dist-packages, which
+# precedes Debian's /usr/lib/.../dist-packages on sys.path, so imports
+# resolve to the pinned versions (the verify step below confirms).
 ARG JSONSCHEMA_VERSION=4.26.0
 ARG PYJWT_VERSION=2.13.0
 ARG CRYPTOGRAPHY_VERSION=48.0.0
 RUN set -eux; \
-    python -m pip install --no-cache-dir --break-system-packages \
+    python -m pip install --no-cache-dir --break-system-packages --ignore-installed \
         "jsonschema==${JSONSCHEMA_VERSION}" \
         "PyJWT==${PYJWT_VERSION}" \
         "cryptography==${CRYPTOGRAPHY_VERSION}"; \
-    python -c "import jsonschema, jwt, cryptography; \
-print('jsonschema', jsonschema.__version__); \
-print('PyJWT', jwt.__version__); \
-print('cryptography', cryptography.__version__)"
+    EXP_JSONSCHEMA="${JSONSCHEMA_VERSION}" EXP_PYJWT="${PYJWT_VERSION}" EXP_CRYPTO="${CRYPTOGRAPHY_VERSION}" \
+    python -c "import os, sys, jsonschema, jwt, cryptography; \
+checks = {'jsonschema': (jsonschema.__version__, os.environ['EXP_JSONSCHEMA']), \
+'PyJWT': (jwt.__version__, os.environ['EXP_PYJWT']), \
+'cryptography': (cryptography.__version__, os.environ['EXP_CRYPTO'])}; \
+[print(n, got) for n, (got, exp) in checks.items()]; \
+bad = {n: got for n, (got, exp) in checks.items() if got != exp}; \
+sys.exit('VERSION MISMATCH (Debian copy shadowing pip install?): %s' % bad) if bad else None"
 
 USER runner
 
