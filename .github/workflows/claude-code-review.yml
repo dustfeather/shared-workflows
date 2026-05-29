@@ -127,7 +127,7 @@ jobs:
           # decision rules above; adaptive is required on 4.7 and gives
           # interleaved thinking between the gh tool calls.
           claude_args: >-
-            --model claude-opus-4-7
+            --model claude-opus-4-8
             --effort high
             --thinking adaptive
             --allowed-tools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr review:*),Bash(gh pr comment:*),Bash(gh api:*)"
