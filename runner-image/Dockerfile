@@ -1,5 +1,9 @@
-# Pre-baked ARC self-hosted runner image with the tooling needed by
-# `claude-code-review.yml` and the other reusable workflows in this repo.
+# Pre-baked ARC self-hosted runner image. Carries the tooling needed by
+# `claude-code-review.yml` and the other reusable workflows in this repo,
+# AND the generic in-cluster-deploy tooling (kubectl, envsubst) that scale
+# sets use to `kubectl apply` manifests against the cluster they run in
+# (e.g. ITGuys-RO/alpaca-opus-trading's deploy.yml). It is the standard
+# runner image for both the review workflows and in-cluster CI deploys.
 #
 # Layered on top of the upstream ARC runner image so the `runner` user,
 # `/home/runner/run.sh` entrypoint, and `externals/` dir (consumed by the
@@ -7,6 +11,11 @@
 #
 # What this bakes in beyond the base image:
 #   - git (already in base, kept for clarity), jq, gh
+#   - kubectl (Kubernetes apt repo, minor-pinned) + gettext-base (envsubst),
+#     for workflows that `kubectl apply` to the cluster they run in. The
+#     binary alone is inert without RBAC: each ARC scale set runs under its
+#     own `<release>-gha-rs-no-permission` SA, so capability is gated per
+#     scale set, not by the image.
 #   - Node.js (NodeSource major release)
 #   - Bun pinned to the version anthropics/claude-code-action@v1 expects
 #   - @anthropic-ai/claude-code globally (Claude Code CLI)
@@ -38,6 +47,12 @@ USER root
 ARG BUN_VERSION=1.3.14
 ARG NODE_MAJOR=22
 
+# kubectl minor track (Kubernetes apt repo path is per-minor). Keep within
+# ±1 minor of the target cluster's API server — `kubectl version` warns on
+# wider skew, though the basic verbs the deploy uses (get/create/apply)
+# tolerate it. Bump when the cluster upgrades.
+ARG KUBECTL_MINOR=1.33
+
 # Force GitHub Actions runner to execute JavaScript actions on Node 24
 # instead of the action's declared `runs.using` runtime (node16/node20).
 # Set at image level so every job using this runner inherits it without
@@ -61,9 +76,16 @@ RUN set -eux; \
     chmod a+r /etc/apt/keyrings/githubcli-archive-keyring.gpg; \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
         > /etc/apt/sources.list.d/github-cli.list; \
+    curl -fsSL "https://pkgs.k8s.io/core:/stable:/v${KUBECTL_MINOR}/deb/Release.key" \
+        | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg; \
+    chmod a+r /etc/apt/keyrings/kubernetes-apt-keyring.gpg; \
+    echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v${KUBECTL_MINOR}/deb/ /" \
+        > /etc/apt/sources.list.d/kubernetes.list; \
     curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash -; \
-    apt-get install -y --no-install-recommends gh nodejs; \
+    apt-get install -y --no-install-recommends gh nodejs kubectl gettext-base; \
     rm -rf /var/lib/apt/lists/*; \
+    kubectl version --client; \
+    command -v envsubst; \
     if [ ! -e /usr/local/bin/python ] && [ -e /usr/bin/python3 ]; then \
         ln -s /usr/bin/python3 /usr/local/bin/python; \
     fi; \
