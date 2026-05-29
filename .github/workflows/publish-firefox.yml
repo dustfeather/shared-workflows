@@ -36,6 +36,13 @@ on:
           burst without coordination.
         type: number
         default: -1
+      runner:
+        description: |
+          Self-hosted ARC scale-set label for the runner pool. Defaults to
+          `arc-df-shared-workflows`; each caller normally pins its own
+          scale-set (e.g. `arc-df-uninsta`, `arc-itguys-ro-invest`).
+        type: string
+        default: "arc-df-shared-workflows"
     secrets:
       AMO_JWT_ISSUER:
         required: false
@@ -49,7 +56,7 @@ permissions:
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     permissions:
       contents: read
     env:

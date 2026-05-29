@@ -22,6 +22,13 @@ on:
           "squash", "rebase", or "merge" to force a specific method.
         type: string
         default: auto
+      runner:
+        description: |
+          Self-hosted ARC scale-set label for the runner pool. Defaults to
+          `arc-df-shared-workflows`; each caller normally pins its own
+          scale-set (e.g. `arc-df-uninsta`, `arc-itguys-ro-invest`).
+        type: string
+        default: "arc-df-shared-workflows"
 
 permissions:
   contents: read
@@ -39,7 +46,7 @@ jobs:
         github.event.workflow_run.event == 'pull_request' &&
         github.event.workflow_run.conclusion == 'success' &&
         github.event.workflow_run.actor.login == 'dependabot[bot]')
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     permissions:
       contents: write
       pull-requests: write
