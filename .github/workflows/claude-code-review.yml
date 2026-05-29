@@ -42,14 +42,14 @@ on:
         default: ""
       runner:
         description: |
-          Label (or labels) for the runner pool. Defaults to GitHub-hosted
-          `ubuntu-latest`. Set to a self-hosted ARC scale-set label (e.g.
-          `arc-df`, `arc-itguys-ro`, `arc-itguys-ro-degoog-infra`) when
-          using `path-to-bun` / `path-to-claude` against the pre-baked
-          `actions-runner-claude` image — those binary paths only exist
-          on that image.
+          Label (or labels) for the runner pool. Defaults to the self-hosted
+          ARC scale-set label `arc-df-shared-workflows`. Override with another
+          self-hosted label (e.g. `arc-df`, `arc-itguys-ro`,
+          `arc-itguys-ro-degoog-infra`) or GitHub-hosted `ubuntu-latest`.
+          Self-hosted labels run the pre-baked `actions-runner-claude` image,
+          where the `path-to-bun` / `path-to-claude` binary paths exist.
         type: string
-        default: "ubuntu-latest"
+        default: "arc-df-shared-workflows"
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
