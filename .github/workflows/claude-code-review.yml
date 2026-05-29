@@ -47,7 +47,9 @@ on:
           self-hosted label (e.g. `arc-df`, `arc-itguys-ro`,
           `arc-itguys-ro-degoog-infra`) or GitHub-hosted `ubuntu-latest`.
           Self-hosted labels run the pre-baked `actions-runner-claude` image,
-          where the `path-to-bun` / `path-to-claude` binary paths exist.
+          where the `path-to-bun` / `path-to-claude` binaries exist — but the
+          action only skips its installs if you also set those inputs (they
+          stay empty by default to keep a `ubuntu-latest` override safe).
         type: string
         default: "arc-df-shared-workflows"
     secrets:
