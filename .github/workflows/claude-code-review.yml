@@ -19,10 +19,11 @@ on:
         description: |
           Surface every tool call (gh pr view, gh pr diff, gh pr review, MCP
           inline-comment calls, etc.) in the action log instead of hiding the
-          agent transcript behind the final result JSON. Defaults to true so
-          reviews are auditable.
+          agent transcript behind the final result JSON. Defaults to false so
+          the action log stays quiet; flip to true per-caller when you need to
+          audit the full agent transcript.
         type: boolean
-        default: true
+        default: false
       runner:
         description: |
           Self-hosted ARC scale-set label for the runner pool. Defaults to
