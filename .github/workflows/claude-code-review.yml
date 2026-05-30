@@ -122,7 +122,7 @@ jobs:
               - Submit a FORMAL verdict with the gh CLI (NOT a plain --comment review):
                   • Approve if the diff is correct, safe, and needs no human follow-up:
                       gh pr review ${{ github.event.pull_request.number }} --approve --body "<one-sentence reasoning>"
-                  • Request changes if anything needs a human to look — correctness/security bug, missing tests, unclear intent, or you are not confident:
+                  • Request changes if anything needs a human to look — correctness/security bug, missing tests, unclear intent, or you are not confident. Minor or trivial items (nits, style, naming, a small cleanup) are also valid grounds; do not soften to an approve just because the issue is small:
                       gh pr review ${{ github.event.pull_request.number }} --request-changes --body "<what needs human attention>"
               - You may also post a top-level `gh pr review --comment --body "..."` summary, but it must accompany a formal verdict, not replace it.
               - When in doubt, request changes. Always end on exactly one of approve/request-changes; never on a plain comment alone.
