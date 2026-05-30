@@ -119,7 +119,12 @@ jobs:
             STANDARD TRACK — for any other author:
               - Do a normal code review: correctness, security, tests, readability.
               - Leave inline comments via mcp__github_inline_comment__create_inline_comment for specific issues.
-              - Submit a top-level review summary with `gh pr review --comment --body "..."`. Do NOT auto-approve human PRs.
+              - Submit a FORMAL verdict with the gh CLI (NOT a plain --comment review):
+                  • Approve if the diff is correct, safe, and needs no human follow-up:
+                      gh pr review ${{ github.event.pull_request.number }} --approve --body "<one-sentence reasoning>"
+                  • Request changes if anything needs a human to look — correctness/security bug, missing tests, unclear intent, or you are not confident:
+                      gh pr review ${{ github.event.pull_request.number }} --request-changes --body "<what needs human attention>"
+              - When in doubt, request changes. Always emit exactly one of these two; never end on a plain comment alone.
 
             Be terse. No emoji. No filler.
           # Opus 4.7 + high effort + adaptive thinking: code review is a
