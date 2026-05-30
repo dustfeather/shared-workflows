@@ -124,7 +124,8 @@ jobs:
                       gh pr review ${{ github.event.pull_request.number }} --approve --body "<one-sentence reasoning>"
                   • Request changes if anything needs a human to look — correctness/security bug, missing tests, unclear intent, or you are not confident:
                       gh pr review ${{ github.event.pull_request.number }} --request-changes --body "<what needs human attention>"
-              - When in doubt, request changes. Always emit exactly one of these two; never end on a plain comment alone.
+              - You may also post a top-level `gh pr review --comment --body "..."` summary, but it must accompany a formal verdict, not replace it.
+              - When in doubt, request changes. Always end on exactly one of approve/request-changes; never on a plain comment alone.
 
             Be terse. No emoji. No filler.
           # Opus 4.7 + high effort + adaptive thinking: code review is a
