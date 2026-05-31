@@ -48,8 +48,19 @@ jobs:
 
       - name: Run Claude Code
         uses: anthropics/claude-code-action@v1
+        env:
+          # Disable rtk's once-a-day telemetry so its hook never makes network
+          # calls in CI.
+          RTK_TELEMETRY_DISABLED: "1"
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Wire rtk as a PreToolUse hook so this interactive responder's Bash
+          # calls (git, gh, tests, builds, kubectl, …) are rewritten to their
+          # token-compressed `rtk ...` form. No --allowed-tools restriction here,
+          # so the rewritten commands need no extra allow-listing. The action
+          # seeds ~/.claude/settings.json from this input.
+          settings: |
+            {"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"rtk hook claude"}]}]}}
           # Match the reusable review job: Opus 4.7, high effort, adaptive
           # thinking. A comment like "@claude review" lands here (interactive
           # mode), not in the auto-review workflow, so it gets the same depth.
