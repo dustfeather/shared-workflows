@@ -24,6 +24,9 @@
 #     refresh-badges workflow; PyJWT+cryptography cover GitHub App / JWT
 #     signing flows from Python — cheap enough to keep in the shared
 #     image so any future Python-using workflow gets them for free).
+#   - code-review-graph: structural code-graph CLI + MCP server consumed by
+#     claude-code-review.yml so the review agent gets blast-radius / impact
+#     context (its `serve` is wired into the action via `--mcp-config`).
 #   - Pre-warmed Bun install cache for anthropics/claude-code-action@v1's
 #     own runtime deps (~140 packages incl. @anthropic-ai/claude-agent-sdk,
 #     @modelcontextprotocol/sdk, octokit), so the per-job
@@ -144,6 +147,19 @@ checks = {'jsonschema': (jsonschema.__version__, os.environ['EXP_JSONSCHEMA']), 
 [print(n, got) for n, (got, exp) in checks.items()]; \
 bad = {n: got for n, (got, exp) in checks.items() if got != exp}; \
 sys.exit('VERSION MISMATCH (Debian copy shadowing pip install?): %s' % bad) if bad else None"
+
+# code-review-graph: parses a repo into a structural graph and serves it over
+# MCP. claude-code-review.yml builds the graph (`code-review-graph build`) and
+# registers `code-review-graph serve` with the action via `--mcp-config`, so the
+# review agent can query blast radius / impact / review context instead of
+# re-reading the whole diff. Pinned so image rebuilds are reproducible; bump to
+# adopt a newer release. Separate RUN from the pinned-libs block above because
+# its dependency closure (tree-sitter parsers, fastmcp, networkx) is unrelated.
+ARG CRG_VERSION=2.3.5
+RUN set -eux; \
+    python -m pip install --no-cache-dir --break-system-packages \
+        "code-review-graph==${CRG_VERSION}"; \
+    code-review-graph --version
 
 USER runner
 
