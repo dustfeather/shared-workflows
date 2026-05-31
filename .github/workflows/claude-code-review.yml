@@ -84,6 +84,16 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Build code review graph
+        # Parses the checkout into code-review-graph's structural graph so the
+        # MCP server (wired into claude_args below) can answer blast-radius /
+        # impact / review-context queries. continue-on-error so a review is
+        # NEVER blocked if the tool is missing (e.g. runner image not yet
+        # rebuilt) or the build fails — the agent prompt falls back to gh pr diff.
+        if: steps.codeql_gate.outputs.skip != 'true'
+        continue-on-error: true
+        run: code-review-graph build
+
       - name: Run Claude Code Review
         if: steps.codeql_gate.outputs.skip != 'true'
         uses: anthropics/claude-code-action@v1
@@ -117,6 +127,11 @@ jobs:
                   gh pr review ${{ github.event.pull_request.number }} --request-changes --body "<what needs human attention>"
 
             STANDARD TRACK — for any other author:
+              - Before reading files by hand, use the code-review-graph MCP tools for structural, token-efficient context:
+                  • Get changed files: `gh pr diff ${{ github.event.pull_request.number }} --name-only`.
+                  • Call detect_changes / get_impact_radius on those files for blast radius, affected execution flows, and missing-test gaps.
+                  • Use get_review_context / query_graph / semantic_search_nodes to pull only the relevant code (callers, callees, tests) instead of whole files.
+                  • If the graph tools are unavailable or return empty (graph not built — e.g. unsupported language or build skipped), fall back to reading the diff directly with `gh pr diff`.
               - Do a normal code review: correctness, security, tests, readability.
               - Leave inline comments via mcp__github_inline_comment__create_inline_comment for specific issues.
               - Submit a FORMAL verdict with the gh CLI (NOT a plain --comment review):
@@ -137,4 +152,5 @@ jobs:
             --model claude-opus-4-8
             --effort high
             --thinking adaptive
-            --allowed-tools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr review:*),Bash(gh pr comment:*),Bash(gh api:*)"
+            --mcp-config '{"mcpServers":{"code-review-graph":{"command":"code-review-graph","args":["serve"]}}}'
+            --allowed-tools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr review:*),Bash(gh pr comment:*),Bash(gh api:*),mcp__code-review-graph__build_or_update_graph_tool,mcp__code-review-graph__get_minimal_context_tool,mcp__code-review-graph__detect_changes_tool,mcp__code-review-graph__get_impact_radius_tool,mcp__code-review-graph__get_review_context_tool,mcp__code-review-graph__get_affected_flows_tool,mcp__code-review-graph__query_graph_tool,mcp__code-review-graph__semantic_search_nodes_tool,mcp__code-review-graph__get_architecture_overview_tool"
