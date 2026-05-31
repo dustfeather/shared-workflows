@@ -15,6 +15,17 @@ on:
         description: pnpm major version (used only when package-manager resolves to pnpm)
         type: string
         default: "10"
+      package-manager-cache:
+        description: |
+          Restore/save the package manager's download cache via
+          `actions/setup-node` (`cache: npm|yarn|pnpm`). On by default. Turn
+          OFF on self-hosted runners where the GitHub Actions cache service
+          is slow to reach: a large store (e.g. a 200 MB pnpm cache) can take
+          longer to download than a cold `install` fetching from the registry
+          CDN. No effect when the package manager is bun (setup-node has no
+          bun cache mode).
+        type: boolean
+        default: true
       working-dir:
         description: Directory containing package.json
         type: string
@@ -113,12 +124,15 @@ jobs:
       - if: steps.pm.outputs.pm == 'bun'
         uses: oven-sh/setup-bun@v2
 
-      # setup-node `cache` accepts npm/yarn/pnpm but not bun. Skip cache for bun.
+      # setup-node `cache` accepts npm/yarn/pnpm but not bun. Skip cache for
+      # bun. An empty `cache` value disables caching, so when
+      # package-manager-cache is false we pass '' and setup-node does no
+      # restore/save.
       - if: steps.pm.outputs.pm != 'bun'
         uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.node-version }}
-          cache: ${{ steps.pm.outputs.pm }}
+          cache: ${{ inputs.package-manager-cache && steps.pm.outputs.pm || '' }}
       - if: steps.pm.outputs.pm == 'bun'
         uses: actions/setup-node@v6
         with:
