@@ -97,10 +97,21 @@ jobs:
       - name: Run Claude Code Review
         if: steps.codeql_gate.outputs.skip != 'true'
         uses: anthropics/claude-code-action@v1
+        env:
+          # rtk's hook writes tee logs / reads config under $HOME; disable its
+          # once-a-day telemetry so the hook never makes network calls in CI.
+          RTK_TELEMETRY_DISABLED: "1"
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allowed_bots: ${{ inputs.allowed-bots }}
           show_full_output: ${{ inputs.show-full-output }}
+          # Wire rtk as a PreToolUse hook: it rewrites Bash commands to their
+          # token-compressed `rtk ...` form (e.g. `gh pr diff` -> `rtk gh pr
+          # diff`). The action seeds ~/.claude/settings.json from this input.
+          # rtk rewrites EVERY gh command, so the rewritten `rtk gh ...` forms
+          # must also be allow-listed in claude_args below or they get denied.
+          settings: |
+            {"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"rtk hook claude"}]}]}}
           # Hardcoded to the pre-baked `actions-runner-claude` image paths;
           # skips the action's in-job Bun + Claude Code installs.
           path_to_bun_executable: /usr/local/bin/bun
@@ -153,4 +164,4 @@ jobs:
             --effort high
             --thinking adaptive
             --mcp-config '{"mcpServers":{"code-review-graph":{"command":"code-review-graph","args":["serve"]}}}'
-            --allowed-tools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr review:*),Bash(gh pr comment:*),Bash(gh api:*),mcp__code-review-graph__build_or_update_graph_tool,mcp__code-review-graph__get_minimal_context_tool,mcp__code-review-graph__detect_changes_tool,mcp__code-review-graph__get_impact_radius_tool,mcp__code-review-graph__get_review_context_tool,mcp__code-review-graph__get_affected_flows_tool,mcp__code-review-graph__query_graph_tool,mcp__code-review-graph__semantic_search_nodes_tool,mcp__code-review-graph__get_architecture_overview_tool"
+            --allowed-tools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr review:*),Bash(gh pr comment:*),Bash(gh api:*),Bash(rtk gh pr view:*),Bash(rtk gh pr diff:*),Bash(rtk gh pr review:*),Bash(rtk gh pr comment:*),Bash(rtk gh api:*),mcp__code-review-graph__build_or_update_graph_tool,mcp__code-review-graph__get_minimal_context_tool,mcp__code-review-graph__detect_changes_tool,mcp__code-review-graph__get_impact_radius_tool,mcp__code-review-graph__get_review_context_tool,mcp__code-review-graph__get_affected_flows_tool,mcp__code-review-graph__query_graph_tool,mcp__code-review-graph__semantic_search_nodes_tool,mcp__code-review-graph__get_architecture_overview_tool"

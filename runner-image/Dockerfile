@@ -27,6 +27,10 @@
 #   - code-review-graph: structural code-graph CLI + MCP server consumed by
 #     claude-code-review.yml so the review agent gets blast-radius / impact
 #     context (its `serve` is wired into the action via `--mcp-config`).
+#   - rtk (Rust Token Killer): compresses command output before it reaches the
+#     model. claude.yml + claude-code-review.yml wire it as a PreToolUse hook
+#     (`rtk hook claude`) via the action's `settings` input; baked here so any
+#     workflow on this runner can use it.
 #   - Pre-warmed Bun install cache for anthropics/claude-code-action@v1's
 #     own runtime deps (~140 packages incl. @anthropic-ai/claude-agent-sdk,
 #     @modelcontextprotocol/sdk, octokit), so the per-job
@@ -160,6 +164,20 @@ RUN set -eux; \
     python -m pip install --no-cache-dir --break-system-packages \
         "code-review-graph==${CRG_VERSION}"; \
     code-review-graph --version
+
+# rtk (Rust Token Killer): single static binary, pinned. Wired into the claude
+# workflows as a PreToolUse Bash hook (`rtk hook claude`) that rewrites commands
+# to their token-compressed `rtk ...` equivalents. Static musl build → no libc
+# coupling to the base image. Telemetry is disabled per-job via the workflow
+# env (RTK_TELEMETRY_DISABLED), so no network egress from the hook.
+ARG RTK_VERSION=0.42.0
+RUN set -eux; \
+    curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/v${RTK_VERSION}/rtk-x86_64-unknown-linux-musl.tar.gz" \
+        -o /tmp/rtk.tar.gz; \
+    tar -xzf /tmp/rtk.tar.gz -C /tmp; \
+    install -m 0755 "$(find /tmp -maxdepth 2 -type f -name rtk | head -1)" /usr/local/bin/rtk; \
+    rm -rf /tmp/rtk.tar.gz; \
+    rtk --version
 
 USER runner
 
