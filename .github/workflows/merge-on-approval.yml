@@ -1,0 +1,111 @@
+name: Merge on approval (reusable)
+
+# Lands a PR when it receives an approving review — e.g. the approval the
+# claude-code-review.yml agent submits via `gh pr review --approve`. Any
+# approving review (human or bot) triggers it; the caller's branch protection
+# still decides whether the merge is actually allowed to proceed.
+#
+# Pair this with a `pull_request_review` trigger in the caller shim:
+#
+#   on:
+#     pull_request_review:
+#       types: [submitted]
+#   jobs:
+#     merge:
+#       uses: dustfeather/shared-workflows/.github/workflows/merge-on-approval.yml@v1
+#       secrets: inherit   # cross-owner (ITGuys-RO/*) callers: pass explicitly
+#
+# The job's own `if:` filters to approved, non-draft reviews, so the shim
+# does not need its own guard.
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: |
+          How to merge. "auto" (default) calls `gh pr merge --auto` so the
+          merge fires once all required status checks pass — requires
+          GitHub's auto-merge feature enabled on the repo (Pro+ for private
+          repos, Free only for public). "direct" merges immediately, which
+          fails if required checks are still pending — use only where
+          auto-merge is unavailable AND the approving review can only land
+          after CI is already green.
+        type: string
+        default: auto
+      merge-method:
+        description: |
+          "rebase" (default) replays the PR commits onto the base branch with
+          no merge commit — matches the rebase-only policy on dustfeather/*
+          and ITGuys-RO/* repos. Override with "squash", "merge", or "auto"
+          ("auto" detects the first allowed method on the repo, priority
+          squash > rebase > merge).
+        type: string
+        default: rebase
+      delete-branch:
+        description: Delete the PR's head branch after a successful merge.
+        type: boolean
+        default: true
+      runner:
+        description: |
+          Self-hosted ARC scale-set label for the runner pool. Defaults to
+          `arc-df-shared-workflows`; each caller normally pins its own
+          scale-set (e.g. `arc-df-uninsta`, `arc-itguys-ro-invest`).
+        type: string
+        default: "arc-df-shared-workflows"
+
+permissions:
+  contents: read
+
+jobs:
+  merge:
+    # Only act on a freshly submitted approving review of a non-draft PR.
+    # `github.event` here is the caller's `pull_request_review` payload.
+    if: |
+      github.event_name == 'pull_request_review' &&
+      github.event.review.state == 'approved' &&
+      github.event.pull_request.draft == false
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Merge on approval
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          MODE: ${{ inputs.mode }}
+          MERGE_METHOD_INPUT: ${{ inputs.merge-method }}
+          DELETE_BRANCH: ${{ inputs.delete-branch }}
+        run: |
+          set -u
+
+          # Resolve merge method. "auto" detects the first allowed method on
+          # the repo; anything else maps straight to the gh flag.
+          if [ "$MERGE_METHOD_INPUT" = "auto" ]; then
+            methods=$(gh api "/repos/$REPO" --jq '
+              (if .allow_squash_merge then "--squash " else "" end) +
+              (if .allow_rebase_merge then "--rebase " else "" end) +
+              (if .allow_merge_commit then "--merge " else "" end)
+            ')
+            method=$(echo "$methods" | awk '{print $1}')
+            if [ -z "$method" ]; then
+              echo "::error::No merge method enabled on $REPO"
+              exit 1
+            fi
+          else
+            method="--$MERGE_METHOD_INPUT"
+          fi
+          echo "Merge method: $method"
+          echo "PR: $PR_URL"
+
+          del=""
+          if [ "$DELETE_BRANCH" = "true" ]; then
+            del="--delete-branch"
+          fi
+
+          if [ "$MODE" = "direct" ]; then
+            gh pr merge "$PR_URL" "$method" $del
+          else
+            gh pr merge --auto "$method" "$PR_URL" $del
+          fi
