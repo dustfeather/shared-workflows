@@ -16,7 +16,13 @@
 #     binary alone is inert without RBAC: each ARC scale set runs under its
 #     own `<release>-gha-rs-no-permission` SA, so capability is gated per
 #     scale set, not by the image.
-#   - Node.js (NodeSource major release)
+#   - Node.js (NodeSource major release) for the image's own build-time and
+#     PATH use (npm global installs, claude-code CLI).
+#   - A second Node, the official tarball, unpacked into the runner
+#     tool-cache (/opt/hostedtoolcache/node/<ver>/x64). `actions/setup-node`
+#     resolves `node-version:` from there with zero download, so callers of
+#     node-test.yml skip the ~20 s per-job Node fetch. RUNNER_TOOL_CACHE is
+#     pinned (see ENV below) so this baked cache is actually consulted.
 #   - Bun pinned to the version anthropics/claude-code-action@v1 expects
 #   - @anthropic-ai/claude-code globally (Claude Code CLI)
 #   - Python 3 + pip, with `jsonschema`, `PyJWT`, and `cryptography`
@@ -54,6 +60,15 @@ USER root
 ARG BUN_VERSION=1.3.14
 ARG NODE_MAJOR=22
 
+# Full Node version baked into the runner tool-cache (see the tool-cache RUN
+# block below). This is what `setup-node` callers (e.g. node-test.yml's
+# default `node-version: 24`) resolve to with zero download. With
+# `check-latest: false` (setup-node default) any cached 24.x satisfies a
+# `node-version: 24` request, so this stays in use until the image is
+# rebuilt. Keep the major aligned with what callers request; bump the patch
+# to adopt a newer 24.x.
+ARG NODE_TOOLCACHE_VERSION=24.16.0
+
 # kubectl minor track (Kubernetes apt repo path is per-minor). Keep within
 # ±1 minor of the target cluster's API server — `kubectl version` warns on
 # wider skew, though the basic verbs the deploy uses (get/create/apply)
@@ -65,6 +80,13 @@ ARG KUBECTL_MINOR=1.33
 # Set at image level so every job using this runner inherits it without
 # per-workflow plumbing.
 ENV FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true
+
+# Pin the runner tool-cache location. On GitHub-hosted runners this is set
+# to /opt/hostedtoolcache; on self-hosted runners it is unset by default and
+# `actions/setup-node` falls back to the ephemeral $RUNNER_WORK/_tool dir,
+# which is wiped each job — meaning a baked tool-cache would never be found.
+# Pinning it here makes setup-node consult the image-baked Node below.
+ENV RUNNER_TOOL_CACHE=/opt/hostedtoolcache
 
 # System packages: jq for the CodeQL gate's response parsing, gh for the
 # review tools the action invokes, plus the usual curl/ca-certificates
@@ -99,6 +121,23 @@ RUN set -eux; \
     if [ ! -e /usr/local/bin/pip ] && [ -e /usr/bin/pip3 ]; then \
         ln -s /usr/bin/pip3 /usr/local/bin/pip; \
     fi
+
+# Bake the official Node tarball into the runner tool-cache so
+# `actions/setup-node` finds it locally instead of downloading from
+# github.com/actions/node-versions every job (~20 s observed on ARC). The
+# layout setup-node expects: <toolcache>/node/<version>/x64 holding the
+# unpacked tarball, plus a sibling <version>/x64.complete marker file that
+# marks the entry as fully installed. chown to `runner` so the non-root job
+# user can read it. `node --version` from the cache path verifies the bake.
+RUN set -eux; \
+    arch=x64; \
+    dest="${RUNNER_TOOL_CACHE}/node/${NODE_TOOLCACHE_VERSION}/${arch}"; \
+    mkdir -p "$dest"; \
+    curl -fsSL "https://nodejs.org/dist/v${NODE_TOOLCACHE_VERSION}/node-v${NODE_TOOLCACHE_VERSION}-linux-x64.tar.gz" \
+        | tar -xz -C "$dest" --strip-components=1; \
+    touch "${RUNNER_TOOL_CACHE}/node/${NODE_TOOLCACHE_VERSION}/${arch}.complete"; \
+    chown -R runner:runner "${RUNNER_TOOL_CACHE}/node"; \
+    "$dest/bin/node" --version
 
 # Bun. The official installer drops to ~/.bun; move into /usr/local/bin so
 # it lives on PATH for both root and the `runner` user with no shell rc
