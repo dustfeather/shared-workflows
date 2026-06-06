@@ -6,7 +6,7 @@ on:
       node-version:
         description: Node.js version to set up
         type: string
-        default: "24"
+        default: "26"
       package-manager:
         description: Package manager to use. "auto" detects from lockfile (pnpm > yarn > bun > npm).
         type: string
