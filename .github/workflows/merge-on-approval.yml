@@ -12,7 +12,7 @@ name: Merge on approval (reusable)
 #       types: [submitted]
 #   jobs:
 #     merge:
-#       uses: dustfeather/shared-workflows/.github/workflows/merge-on-approval.yml@v3
+#       uses: dustfeather/shared-workflows/.github/workflows/merge-on-approval.yml@v4
 #       secrets: inherit   # cross-owner (ITGuys-RO/*) callers: pass explicitly
 #
 # The job's own `if:` filters to approved, non-draft reviews, so the shim
