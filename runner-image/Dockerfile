@@ -94,10 +94,18 @@ ENV RUNNER_TOOL_CACHE=/opt/hostedtoolcache
 # install of @anthropic-ai/claude-code works. python3 + pip are added for
 # any workflow that needs a one-off script runtime (no system jsonschema
 # package on Debian 12 newer than 4.10, so we install via pip below).
+#
+# libatomic1 is required by the official Node tarball baked into the runner
+# tool-cache below (setup-node callers). The NodeSource `nodejs` package
+# pulls it in transitively, but the tarball Node ships no deps, so without
+# it `node` from the tool-cache dies with `error while loading shared
+# libraries: libatomic.so.1: cannot open shared object file` (exit 127) —
+# breaking any setup-node job, e.g. ITGuys-RO/alpaca-opus-trading's deploy.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         ca-certificates curl gnupg jq unzip \
+        libatomic1 \
         python3 python3-pip; \
     install -m 0755 -d /etc/apt/keyrings; \
     curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
