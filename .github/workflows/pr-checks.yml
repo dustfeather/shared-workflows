@@ -21,7 +21,7 @@ jobs:
       pull-requests: write
       issues: read
       id-token: write
-    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v2
+    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v3
     with:
       runner: arc-df-shared-workflows
     secrets:
