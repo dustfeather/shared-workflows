@@ -90,7 +90,7 @@ jobs:
       - if: steps.gate.outputs.skip == 'false'
         uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version: 26
 
       - name: Stagger to avoid AMO 3/min user-burst throttle
         if: steps.gate.outputs.skip == 'false' && inputs.stagger-seconds-max > 0

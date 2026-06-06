@@ -58,16 +58,16 @@ USER root
 # bump here too — mismatched versions are not a hard failure (the action
 # accepts whatever bun is on PATH) but staying aligned avoids surprises.
 ARG BUN_VERSION=1.3.14
-ARG NODE_MAJOR=22
+ARG NODE_MAJOR=26
 
 # Full Node version baked into the runner tool-cache (see the tool-cache RUN
 # block below). This is what `setup-node` callers (e.g. node-test.yml's
-# default `node-version: 24`) resolve to with zero download. With
-# `check-latest: false` (setup-node default) any cached 24.x satisfies a
-# `node-version: 24` request, so this stays in use until the image is
+# default `node-version: 26`) resolve to with zero download. With
+# `check-latest: false` (setup-node default) any cached 26.x satisfies a
+# `node-version: 26` request, so this stays in use until the image is
 # rebuilt. Keep the major aligned with what callers request; bump the patch
-# to adopt a newer 24.x.
-ARG NODE_TOOLCACHE_VERSION=24.16.0
+# to adopt a newer 26.x.
+ARG NODE_TOOLCACHE_VERSION=26.3.0
 
 # kubectl minor track (Kubernetes apt repo path is per-minor). Keep within
 # ±1 minor of the target cluster's API server — `kubectl version` warns on
