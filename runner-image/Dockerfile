@@ -135,8 +135,17 @@ RUN set -eux; \
 # github.com/actions/node-versions every job (~20 s observed on ARC). The
 # layout setup-node expects: <toolcache>/node/<version>/x64 holding the
 # unpacked tarball, plus a sibling <version>/x64.complete marker file that
-# marks the entry as fully installed. chown to `runner` so the non-root job
-# user can read it. `node --version` from the cache path verifies the bake.
+# marks the entry as fully installed. `node --version` from the cache path
+# verifies the bake.
+#
+# chown the WHOLE tool-cache root (not just node/) to `runner`: the dir is
+# created root-owned by this `mkdir -p` running as root, but the non-root
+# `runner` job user must be able to create sibling tool dirs at runtime —
+# e.g. `actions/setup-python` does `mkdir ${RUNNER_TOOL_CACHE}/Python` and
+# without write access on the root it dies with
+# `mkdir: cannot create directory '/opt/hostedtoolcache/Python': Permission
+# denied`, failing every setup-python job. Owning the root fixes setup-python
+# (and any future setup-*) while still covering the baked node/ tree.
 RUN set -eux; \
     arch=x64; \
     dest="${RUNNER_TOOL_CACHE}/node/${NODE_TOOLCACHE_VERSION}/${arch}"; \
@@ -144,7 +153,7 @@ RUN set -eux; \
     curl -fsSL "https://nodejs.org/dist/v${NODE_TOOLCACHE_VERSION}/node-v${NODE_TOOLCACHE_VERSION}-linux-x64.tar.gz" \
         | tar -xz -C "$dest" --strip-components=1; \
     touch "${RUNNER_TOOL_CACHE}/node/${NODE_TOOLCACHE_VERSION}/${arch}.complete"; \
-    chown -R runner:runner "${RUNNER_TOOL_CACHE}/node"; \
+    chown -R runner:runner "${RUNNER_TOOL_CACHE}"; \
     "$dest/bin/node" --version
 
 # Bun. The official installer drops to ~/.bun; move into /usr/local/bin so
