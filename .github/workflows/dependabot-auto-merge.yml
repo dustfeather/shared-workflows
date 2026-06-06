@@ -17,11 +17,12 @@ on:
         default: auto
       merge-method:
         description: |
-          "auto" (default) detects the first allowed merge method on the
-          repo (priority: squash > rebase > merge). Override with
-          "squash", "rebase", or "merge" to force a specific method.
+          "squash" (default) combines the PR commits into a single commit on
+          the base branch. Override with "rebase", "merge", or "auto"
+          ("auto" detects the first allowed method on the repo, priority
+          squash > rebase > merge).
         type: string
-        default: auto
+        default: squash
       runner:
         description: |
           Self-hosted ARC scale-set label for the runner pool. Defaults to

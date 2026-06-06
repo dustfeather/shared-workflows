@@ -34,13 +34,12 @@ on:
         default: auto
       merge-method:
         description: |
-          "rebase" (default) replays the PR commits onto the base branch with
-          no merge commit — matches the rebase-only policy on dustfeather/*
-          and ITGuys-RO/* repos. Override with "squash", "merge", or "auto"
+          "squash" (default) combines the PR commits into a single commit on
+          the base branch. Override with "rebase", "merge", or "auto"
           ("auto" detects the first allowed method on the repo, priority
           squash > rebase > merge).
         type: string
-        default: rebase
+        default: squash
       delete-branch:
         description: Delete the PR's head branch after a successful merge.
         type: boolean
