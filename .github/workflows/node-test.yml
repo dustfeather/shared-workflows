@@ -18,14 +18,16 @@ on:
       package-manager-cache:
         description: |
           Restore/save the package manager's download cache via
-          `actions/setup-node` (`cache: npm|yarn|pnpm`). On by default. Turn
-          OFF on self-hosted runners where the GitHub Actions cache service
-          is slow to reach: a large store (e.g. a 200 MB pnpm cache) can take
-          longer to download than a cold `install` fetching from the registry
-          CDN. No effect when the package manager is bun (setup-node has no
-          bun cache mode).
+          `actions/setup-node` (`cache: npm|yarn|pnpm`). OFF by default: every
+          caller runs on the self-hosted ARC pool, whose runners mount a
+          persistent node-local pnpm/npm store (hostPath on acer-laptop, via
+          npm_config_store_dir/npm_config_cache). The setup-node cache restore
+          round-trips that store through the throttled in-cluster GitHub
+          Actions cache service (~40s/job) — pure overhead. Turn ON only for a
+          GitHub-hosted caller, which has no persistent store. No effect when
+          the package manager is bun (setup-node has no bun cache mode).
         type: boolean
-        default: true
+        default: false
       working-dir:
         description: Directory containing package.json
         type: string
