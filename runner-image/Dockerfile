@@ -104,7 +104,7 @@ ENV RUNNER_TOOL_CACHE=/opt/hostedtoolcache
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
-        ca-certificates curl gnupg jq unzip \
+        ca-certificates curl gnupg jq zip unzip \
         libatomic1 \
         python3 python3-pip; \
     install -m 0755 -d /etc/apt/keyrings; \
