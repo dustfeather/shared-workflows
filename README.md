@@ -173,6 +173,29 @@ checking.
 
 Secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are both required.
 
+#### Runtime secrets — `WORKER_SECRETS`
+
+Optional. Publishes the caller's GitHub repo secrets onto the Worker as part of
+the deploy, so the credentials a repo holds and the credentials its Worker runs
+with cannot drift apart.
+
+They travel via wrangler's `--secrets-file`, which attaches them **to the
+version being deployed** — not as a follow-up `wrangler secret bulk`. A bulk
+call after the deploy would publish a *second* version, leaving a window where
+the new code runs against the old credentials, and it requires the Worker to
+already exist, which is false on a first-ever deploy.
+
+- **Additive.** Dropping a key from `WORKER_SECRETS` does not delete it from the
+  Worker. Removing a secret is still a deliberate `wrangler secret delete`.
+- **`KEY=VALUE` lines are the form to use.** Wrangler tries JSON first and falls
+  back to dotenv; the JSON form makes the caller responsible for escaping every
+  value. Values must be single-line in either form.
+- **Names only are logged**, and the staged file is shredded after the deploy.
+- An unparseable payload **fails the job**. Wrangler silently no-ops on input it
+  cannot read, which would otherwise deploy a Worker with no secrets and report
+  success. After deploying, the job re-reads `wrangler secret list` and fails if
+  any staged name is absent.
+
 ```yaml
 deploy-api:
   needs: test
@@ -188,6 +211,9 @@ deploy-api:
   secrets:
     CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    WORKER_SECRETS: |
+      SESSION_SECRET=${{ secrets.SESSION_SECRET }}
+      STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}
 ```
 
 ## Usage
