@@ -92,7 +92,7 @@ jobs:
   tests:
     if: github.event.action != 'closed'
     permissions: { contents: read }
-    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v1
+    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v4
     with:
       run-build: true   # extension repos / projects with a meaningful build script
   review:
@@ -103,7 +103,7 @@ jobs:
       pull-requests: write
       issues: read
       id-token: write
-    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v1
+    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v4
     secrets: inherit  # use explicit pass for cross-owner — see "Cross-owner callers"
 ```
 
@@ -133,6 +133,63 @@ Picks up `@claude` mentions in issues, issue comments, PR review comments,
 and PR reviews from a trusted actor and hands the conversation to Claude
 Code Action.
 
+### `deploy-cloudflare.yml` — deploy one Worker with wrangler
+
+Command-shaped rather than framework-shaped: it takes shell strings
+(`build-command`, `pre-deploy-command`, `deploy-command`) instead of detecting
+whether the caller is a plain Worker, an OpenNext Next.js app or something
+else. One job deploys one Worker; a repo with two Workers calls it twice and
+orders them with `needs:`.
+
+The step order is fixed and is the part that matters:
+
+```
+install → build → pre-deploy → budget gate → deploy → startup gate → verify
+```
+
+`pre-deploy-command` (migrations, publishing reference data) runs *before* the
+deploy on purpose. A Worker whose schema or KV is not there yet does not fail
+to start — it answers wrongly, which reads as an application bug rather than a
+deploy that ran out of order.
+
+Two budget gates, and they sit on opposite sides of the deploy because
+wrangler reports the two numbers at different times:
+
+| Gate | Input | When | Prevents a bad deploy? |
+| --- | --- | --- | --- |
+| Bundle gzip size | `max-gzip-kib` | before, via `--dry-run` | **yes** |
+| Worker startup time | `max-startup-ms` | after the upload | no — only the upload measures it |
+
+The startup gate cannot block the version that tripped it, because
+`--dry-run` never reports a startup time. What it does is make the *next*
+merge fail loudly instead of letting cold-start creep run until it hits the
+hard 1 s ceiling and deploys start dying with
+`10021 Script startup exceeded CPU time limit`. Both gates default to `0`,
+which disables them.
+
+`verify-url` polls the deployed Worker until it answers 2xx (12 attempts, 5 s
+apart by default). Skipping it is allowed and is a choice to deploy without
+checking.
+
+Secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are both required.
+
+```yaml
+deploy-api:
+  needs: test
+  uses: dustfeather/shared-workflows/.github/workflows/deploy-cloudflare.yml@v4
+  with:
+    working-dir: apps/api
+    install-dir: .
+    runner: arc-df-my-repo
+    pre-deploy-command: npx wrangler d1 migrations apply my-db --remote
+    max-gzip-kib: 600
+    max-startup-ms: 400
+    verify-url: https://example.com/api/v1/health
+  secrets:
+    CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+```
+
 ## Usage
 
 Each calling repo has a tiny shim. The shim handles trigger configuration
@@ -155,7 +212,7 @@ on:
 
 jobs:
   review:
-    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v1
+    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v4
     secrets: inherit
 ```
 
@@ -175,7 +232,7 @@ on:
 
 jobs:
   claude:
-    uses: dustfeather/shared-workflows/.github/workflows/claude.yml@v1
+    uses: dustfeather/shared-workflows/.github/workflows/claude.yml@v4
     secrets: inherit
 ```
 
@@ -197,7 +254,7 @@ When the calling repo is owned by the same account as `shared-workflows`
 ```yaml
 jobs:
   review:
-    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v1
+    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v4
     secrets: inherit
 ```
 
@@ -225,7 +282,7 @@ and forwarded as a named secret:
 ```yaml
 jobs:
   review:
-    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v1
+    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v4
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
@@ -249,7 +306,7 @@ Example (private repo where another teammate should also be able to invoke):
 ```yaml
 jobs:
   review:
-    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v1
+    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v4
     with:
       trusted-actors: "dustfeather,collaborator-handle"
     secrets: inherit
@@ -257,7 +314,7 @@ jobs:
 
 ## Versioning
 
-Callers pin to `@v1` (the moving major-version tag, GitHub Actions
+Callers pin to `@v4` (the current moving major-version tag, GitHub Actions
 convention). Every push to `main` is auto-tagged by
 `.github/workflows/tag-release.yml`: by default it bumps the **patch**
 component by one (wrapping at 100 into minor; minor grows without bound),
@@ -271,9 +328,9 @@ Pick the bump by what changes for **callers** of these reusable workflows:
 
 | Bump | Token | When | Caller impact |
 |---|---|---|---|
-| **patch** | _(default, or `#patch`)_ | Bug fix in a workflow; doc-only change; internal refactor; bumping an action used *inside* a workflow with no interface change; log/wording tweaks. | None — `@v1` callers get it automatically, nothing to do. |
+| **patch** | _(default, or `#patch`)_ | Bug fix in a workflow; doc-only change; internal refactor; bumping an action used *inside* a workflow with no interface change; log/wording tweaks. | None — `@v4` callers get it automatically, nothing to do. |
 | **minor** | `#minor` | Backwards-compatible feature: a new **optional** input (with a default), a brand-new workflow, a new opt-in job/step, broadened behavior that callers don't have to react to. | None required; new capability is available if they want it. |
-| **major** | `#major` | Breaking change to a workflow's contract: removing/renaming an input or secret, adding a **required** input, changing a default in a way callers must account for, requiring callers to grant new permissions, removing a workflow, renaming a job output. | **Callers on `@v1` would break.** A `#major` bump rolls the version to `vN+1`; update the README usage examples and tell callers to re-pin to `@vN+1`. |
+| **major** | `#major` | Breaking change to a workflow's contract: removing/renaming an input or secret, adding a **required** input, changing a default in a way callers must account for, requiring callers to grant new permissions, removing a workflow, renaming a job output. | **Callers on `@v4` would break.** A `#major` bump rolls the version to `vN+1`; update the README usage examples and tell callers to re-pin to `@vN+1`. |
 
 Rule of thumb: if a caller's shim workflow could keep working untouched →
 patch or minor; if it couldn't → major. When unsure, prefer the larger bump.
@@ -291,14 +348,14 @@ uploads an artifact named `extensions` containing the packaged `.zip`,
 ```yaml
 publish-chrome:
   needs: build
-  uses: dustfeather/shared-workflows/.github/workflows/publish-chrome.yml@v1
+  uses: dustfeather/shared-workflows/.github/workflows/publish-chrome.yml@v4
   with:
     zip-name: my-ext-chrome-${{ needs.build.outputs.tag }}.zip
   secrets: inherit
 
 publish-firefox:
   needs: build
-  uses: dustfeather/shared-workflows/.github/workflows/publish-firefox.yml@v1
+  uses: dustfeather/shared-workflows/.github/workflows/publish-firefox.yml@v4
   with:
     xpi-name: my-ext-firefox-${{ needs.build.outputs.tag }}.xpi
     source-name: source-${{ needs.build.outputs.tag }}.zip
