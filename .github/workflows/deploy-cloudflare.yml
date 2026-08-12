@@ -127,11 +127,11 @@ on:
           `KEY=VALUE` lines or a JSON object of string values. Empty (the
           default) skips the whole mechanism.
 
-          The caller composes this from its own GitHub repo secrets, e.g.
-
-            WORKER_SECRETS: |
-              SESSION_SECRET=${{ secrets.SESSION_SECRET }}
-              STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}
+          The caller composes this from its own GitHub repo secrets — a block
+          of `NAME=<expression>` lines, one per secret. See the README for a
+          copyable example; it is not reproduced here because an expression
+          written in this description would be evaluated as one, and the
+          `secrets` context is not available in the `on:` block.
 
           Prefer the `KEY=VALUE` form: wrangler tries JSON first and falls back
           to dotenv, and the JSON form would need every value escaped correctly
