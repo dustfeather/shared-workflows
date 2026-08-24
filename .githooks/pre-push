@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Static checks for the reusable workflows, run before anything leaves the
+# machine. There is no build and no test suite in this repo, and a reusable
+# workflow cannot be invoked from a local checkout — `uses:` only resolves
+# through GitHub — so without this the first feedback on a mistake is a failed
+# run in someone else's repo, and for two of the checked failure modes that run
+# has zero jobs, no logs and no annotation.
+#
+# Enable once per clone:   git config core.hooksPath .githooks
+# Bypass deliberately:     git push --no-verify
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "pre-push: python3 not found — skipping workflow checks" >&2
+  exit 0
+fi
+
+if ! python3 -c 'import yaml' 2>/dev/null; then
+  echo "pre-push: PyYAML not installed — skipping workflow checks" >&2
+  echo "pre-push: install it with 'pip install --user pyyaml' to enable them" >&2
+  exit 0
+fi
+
+echo "pre-push: checking workflows"
+if ! python3 scripts/check-workflows.py; then
+  echo >&2
+  echo "pre-push: workflow checks failed — push aborted." >&2
+  echo "pre-push: these break every caller, so fix before pushing." >&2
+  echo "pre-push: override with 'git push --no-verify' if you are certain." >&2
+  exit 1
+fi

@@ -1,0 +1,158 @@
+name: Build and push image (reusable)
+
+# Builds one container image and pushes it to GHCR, then reports the full
+# reference it pushed so a following job can deploy it.
+#
+# This is split out of deploy-k8s.yml rather than living inside it, and the
+# reason is a hard constraint rather than taste: a called workflow may not
+# request more GITHUB_TOKEN permission than the calling job grants, and
+# `permissions:` accepts no expressions — so a single workflow cannot ask for
+# `packages: write` only when it is actually building. Requesting it
+# unconditionally makes every non-building caller fail at validation with
+# `startup_failure` and zero jobs, which is a genuinely awful thing to debug:
+# the explanatory message is UI-only and does not appear in the API, so
+# `gh run view --log-failed` returns nothing at all.
+#
+# So: callers that build run this first and grant it `packages: write`;
+# callers that deploy a stock upstream image never see the permission.
+#
+#   build:
+#     permissions: { contents: read, packages: write }
+#     uses: dustfeather/shared-workflows/.github/workflows/build-push-image.yml@v4
+#   deploy:
+#     needs: build
+#     permissions: { contents: read }
+#     uses: dustfeather/shared-workflows/.github/workflows/deploy-k8s.yml@v4
+#     with:
+#       image: ${{ needs.build.outputs.image }}
+
+on:
+  workflow_call:
+    inputs:
+      working-dir:
+        description: Directory the build context and Dockerfile resolve against.
+        type: string
+        default: "."
+      docker-context:
+        description: Build context, relative to `working-dir`.
+        type: string
+        default: "."
+      dockerfile:
+        description: |
+          Dockerfile path relative to `working-dir`. Empty uses
+          `<docker-context>/Dockerfile`.
+        type: string
+        default: ""
+      image-repo:
+        description: |
+          Image repo without a tag. Empty derives `ghcr.io/<owner>/<repo>`
+          lowercased. Set it when the image name differs from the repo name —
+          a monorepo shipping more than one image.
+        type: string
+        default: ""
+      image-tag:
+        description: Tag to push. Empty uses the commit SHA.
+        type: string
+        default: ""
+      build-cache:
+        description: |
+          Push and reuse a registry build cache at `<image-repo>:buildcache`.
+        type: boolean
+        default: true
+      platforms:
+        description: Target platforms for the build.
+        type: string
+        default: "linux/amd64"
+      runner:
+        description: |
+          Runner label. Must be a scale set with a working docker daemon —
+          on the dind sets the daemon is now gated by a startupProbe, so the
+          old race against dockerd binding its socket no longer applies.
+        type: string
+        default: "arc-df-shared-workflows"
+    outputs:
+      image:
+        description: Full reference of the pushed image, `<repo>:<tag>`.
+        value: ${{ jobs.build.outputs.image }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.img.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Resolve image reference
+        id: img
+        env:
+          IMAGE_REPO: ${{ inputs.image-repo }}
+          IMAGE_TAG: ${{ inputs.image-tag }}
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          WORKING_DIR: ${{ inputs.working-dir }}
+          DOCKER_CONTEXT: ${{ inputs.docker-context }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
+        run: |
+          set -eu
+          repo="$IMAGE_REPO"
+          if [ -z "$repo" ]; then
+            # ghcr rejects an uppercase path segment, and GitHub repo names are
+            # not case-normalised.
+            repo="ghcr.io/$(printf '%s' "$REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          fi
+          tag="${IMAGE_TAG:-$SHA}"
+
+          context="$WORKING_DIR/$DOCKER_CONTEXT"
+          if [ -n "$DOCKERFILE" ]; then
+            file="$WORKING_DIR/$DOCKERFILE"
+          else
+            file="$context/Dockerfile"
+          fi
+
+          if [ ! -f "$file" ]; then
+            echo "::error::Dockerfile not found: ${file}"
+            exit 1
+          fi
+
+          {
+            echo "repo=${repo}"
+            echo "ref=${repo}:${tag}"
+            echo "context=${context}"
+            echo "file=${file}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Building ${repo}:${tag} from ${file}"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ steps.img.outputs.context }}
+          file: ${{ steps.img.outputs.file }}
+          push: true
+          platforms: ${{ inputs.platforms }}
+          tags: ${{ steps.img.outputs.ref }}
+          cache-from: ${{ inputs.build-cache && format('type=registry,ref={0}:buildcache', steps.img.outputs.repo) || '' }}
+          cache-to: ${{ inputs.build-cache && format('type=registry,ref={0}:buildcache,mode=max', steps.img.outputs.repo) || '' }}
+
+      - name: Summary
+        if: always()
+        env:
+          IMAGE_REF: ${{ steps.img.outputs.ref }}
+        run: |
+          set -eu
+          echo "### Image — \`${IMAGE_REF}\`" >> "$GITHUB_STEP_SUMMARY"

@@ -46,6 +46,17 @@ on:
         type: string
         default: "26"
 
+# Default for the whole file. `prepare` and `release` raise themselves to
+# `contents: write` for the version commit and the GitHub release; `build`,
+# `publish-chrome` and `publish-firefox` declare nothing and so inherit this,
+# which is what they should have: they move artifacts and talk to the store
+# APIs with their own tokens, and none of them writes to the repo.
+#
+# Without this block those three inherited the repository's default token
+# scope, which can be read/write on everything.
+permissions:
+  contents: read
+
 jobs:
   tests:
     permissions:

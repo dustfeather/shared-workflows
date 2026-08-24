@@ -32,11 +32,22 @@ name: Deploy to Kubernetes (reusable)
 # gone. Recovering one such failure from ITGuys-RO/apps-page (2026-06-17) took
 # commit archaeology because the `Show result` step never ran.
 #
-# PERMISSIONS CEILING: a reusable workflow's job permissions are INTERSECTED
-# with the calling job's. A caller setting `build-image: true` must declare
-# `permissions: { contents: read, packages: write }` on the calling job, or the
-# ghcr push fails 403 — after a full image build. This is the most likely
-# first-migration failure; see the README.
+# PERMISSIONS: this workflow requests `contents: read` and nothing more, and
+# that is load-bearing. A called workflow may not request MORE GITHUB_TOKEN
+# permission than the calling job grants, and `permissions:` accepts no
+# expressions — so a workflow that asked for `packages: write` in order to
+# build an image would break every caller granting least privilege, whether or
+# not that caller builds anything.
+#
+# The failure is not a graceful downgrade. The run dies at validation with
+# `startup_failure`, zero jobs, and no logs: GitHub's explanation ("the nested
+# job is requesting 'packages: write', but is only allowed 'packages: none'")
+# is rendered in the UI only and is absent from the REST and GraphQL APIs, so
+# `gh run view --log-failed` returns nothing whatsoever. This is exactly how
+# the first migration of this workflow failed.
+#
+# Hence building lives in build-push-image.yml, invoked as a preceding job by
+# the callers that need it, and its `image` output is passed in here.
 
 on:
   workflow_call:
@@ -81,42 +92,17 @@ on:
         type: string
         default: ""
 
-      # --- image build ---------------------------------------------------
-      build-image:
+      # --- image ---------------------------------------------------------
+      image:
         description: |
-          Build and push a container image before deploying. OFF by default —
-          callers deploying a stock upstream image have nothing to build.
+          Full image reference exposed to `templated-manifests` as IMAGE.
+          Empty derives `ghcr.io/<owner>/<repo>:<sha>` lowercased.
 
-          On a dind scale set this can lose a race against dockerd starting;
-          see ITGuys-RO/k3s-cluster#2.
-        type: boolean
-        default: false
-      image-repo:
-        description: |
-          Image repo without a tag. Empty derives `ghcr.io/<owner>/<repo>`
-          lowercased, which is what most callers want. Set it when the image
-          name differs from the repo name (a monorepo shipping several images).
+          This workflow does NOT build. A caller that needs an image built runs
+          build-push-image.yml as a preceding job and passes its `image` output
+          here — see the header for why the build cannot live in this workflow.
         type: string
         default: ""
-      image-tag:
-        description: Tag for the built image. Empty uses the commit SHA.
-        type: string
-        default: ""
-      docker-context:
-        description: Build context, relative to `working-dir`.
-        type: string
-        default: "."
-      dockerfile:
-        description: |
-          Dockerfile path relative to `working-dir`. Empty uses
-          `<docker-context>/Dockerfile`.
-        type: string
-        default: ""
-      build-cache:
-        description: |
-          Push and reuse a registry build cache at `<image-repo>:buildcache`.
-        type: boolean
-        default: true
 
       # --- namespace and secrets -----------------------------------------
       ensure-namespace:
@@ -245,9 +231,10 @@ jobs:
   deploy:
     runs-on: ${{ inputs.runner }}
     environment: ${{ inputs.environment }}
+    # contents: read only. Requesting packages: write here would make every
+    # caller that grants least privilege fail at validation — see the header.
     permissions:
       contents: read
-      packages: write
     env:
       NS: ${{ inputs.namespace }}
       # Lifted to job level because the `secrets` context is not available in a
@@ -260,64 +247,21 @@ jobs:
       - name: Resolve image reference
         id: img
         env:
-          IMAGE_REPO: ${{ inputs.image-repo }}
-          IMAGE_TAG: ${{ inputs.image-tag }}
+          IMAGE: ${{ inputs.image }}
           REPOSITORY: ${{ github.repository }}
           SHA: ${{ github.sha }}
-          WORKING_DIR: ${{ inputs.working-dir }}
-          DOCKER_CONTEXT: ${{ inputs.docker-context }}
-          DOCKERFILE: ${{ inputs.dockerfile }}
         run: |
           set -eu
-          # Resolved even when build-image is false: a caller can still deploy a
-          # manifest templated with an image reference that some other workflow
-          # pushed.
-          repo="$IMAGE_REPO"
-          if [ -z "$repo" ]; then
+          ref="$IMAGE"
+          if [ -z "$ref" ]; then
             # ghcr rejects an uppercase path segment, and GitHub repo names are
             # not case-normalised.
-            repo="ghcr.io/$(printf '%s' "$REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+            ref="ghcr.io/$(printf '%s' "$REPOSITORY" | tr '[:upper:]' '[:lower:]'):${SHA}"
           fi
-          tag="${IMAGE_TAG:-$SHA}"
-
-          context="$WORKING_DIR/$DOCKER_CONTEXT"
-          if [ -n "$DOCKERFILE" ]; then
-            file="$WORKING_DIR/$DOCKERFILE"
-          else
-            file="$context/Dockerfile"
-          fi
-
-          {
-            echo "repo=${repo}"
-            echo "ref=${repo}:${tag}"
-            echo "context=${context}"
-            echo "file=${file}"
-          } >> "$GITHUB_OUTPUT"
+          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
           # Exported for envsubst in the apply step.
-          echo "IMAGE=${repo}:${tag}" >> "$GITHUB_ENV"
-          echo "Image: ${repo}:${tag}"
-
-      - if: inputs.build-image
-        uses: docker/setup-buildx-action@v3
-
-      - if: inputs.build-image
-        name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - if: inputs.build-image
-        name: Build and push image
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ steps.img.outputs.context }}
-          file: ${{ steps.img.outputs.file }}
-          push: true
-          tags: ${{ steps.img.outputs.ref }}
-          cache-from: ${{ inputs.build-cache && format('type=registry,ref={0}:buildcache', steps.img.outputs.repo) || '' }}
-          cache-to: ${{ inputs.build-cache && format('type=registry,ref={0}:buildcache,mode=max', steps.img.outputs.repo) || '' }}
+          echo "IMAGE=${ref}" >> "$GITHUB_ENV"
+          echo "Image: ${ref}"
 
       - if: inputs.setup-kubectl
         uses: azure/setup-kubectl@v4
@@ -530,13 +474,14 @@ jobs:
         if: always()
         env:
           IMAGE_REF: ${{ steps.img.outputs.ref }}
-          BUILD_IMAGE: ${{ inputs.build-image }}
+          TEMPLATED: ${{ inputs.templated-manifests }}
           TARGETS: ${{ inputs.rollout-targets }}
         run: |
           set -eu
           {
             echo "### Kubernetes deploy — \`${NS}\`"
-            [ "$BUILD_IMAGE" = "true" ] && echo "- image: \`${IMAGE_REF}\`"
+            # Only meaningful when a manifest actually consumed IMAGE.
+            [ -n "$TEMPLATED" ] && echo "- image: \`${IMAGE_REF}\`"
             [ -n "$TARGETS" ] && echo "- rollout: $(printf '%s' "$TARGETS" | tr '\n' ' ')"
             true
           } >> "$GITHUB_STEP_SUMMARY"

@@ -242,17 +242,35 @@ input. Every caller runs on an ARC scale set inside the target cluster, where
 kubectl picks the token up with no configuration — so `runner:` must name a
 scale set in that cluster. A GitHub-hosted runner cannot use this workflow.
 
-**The permissions ceiling is the most likely first-migration failure.** A
-reusable workflow's job permissions are *intersected* with the calling job's.
-A caller setting `build-image: true` must declare `packages: write` on the
-**calling** job, or the ghcr push fails 403 — after a full image build:
+**This workflow does not build images**, and that is a constraint rather than
+an omission. A called workflow may not request more `GITHUB_TOKEN` permission
+than the calling job grants, and `permissions:` accepts no expressions — so a
+workflow asking for `packages: write` in order to build would break every
+caller that grants least privilege, whether or not that caller builds.
+
+The break is also unusually nasty: the run dies at validation with
+`startup_failure`, **zero jobs and no logs**. GitHub's explanation ("the nested
+job is requesting `packages: write`, but is only allowed `packages: none`")
+appears in the web UI only and is absent from the REST and GraphQL APIs, so
+`gh run view --log-failed` returns nothing at all.
+
+So building lives in `build-push-image.yml`. A caller that needs one runs it
+first and passes the image through:
 
 ```yaml
-deploy:
+build:
   permissions:
     contents: read
-    packages: write   # required, or the push 403s
+    packages: write        # only this job needs it
+  uses: dustfeather/shared-workflows/.github/workflows/build-push-image.yml@v4
+
+deploy:
+  needs: build
+  permissions:
+    contents: read         # deploy never needs more
   uses: dustfeather/shared-workflows/.github/workflows/deploy-k8s.yml@v4
+  with:
+    image: ${{ needs.build.outputs.image }}
 ```
 
 Every input defaults to behaviour-preserving, so a minimal call is namespace +
@@ -263,7 +281,7 @@ manifests. The ones worth knowing:
 | `namespace` | *required* | every kubectl call is `-n` scoped to it |
 | `ensure-namespace` | `get` | `get` asserts, `create` creates, `none` skips. `get` is the default because a per-scale-set runner SA usually cannot create namespaces at all, and `create` would trade a clear error for an RBAC denial |
 | `setup-kubectl` | `false` | the pre-baked runner image already ships kubectl and envsubst; turn on for a scale set still on the stock `actions-runner` image |
-| `build-image` | `false` | callers deploying a stock upstream image have nothing to build |
+| `image` | derived | full reference exposed to `templated-manifests` as the image variable. Empty derives `ghcr.io/<owner>/<repo>:<sha>`; pass `build-push-image.yml`'s output when you built one |
 | `manifests` | `""` | applied verbatim, in order |
 | `templated-manifests` | `""` | piped through envsubst first, applied after `manifests` |
 | `envsubst-vars` | image var only | restricts substitution. Unrestricted envsubst also eats shell-looking tokens that belong to the manifest — a snippet in an exec probe, an arg the container expects at runtime — silently replacing them with an empty string |
@@ -278,21 +296,29 @@ events, which is where `ImagePullBackOff` and missing-Secret failures actually
 show up. One such failure took commit archaeology to reconstruct because the
 caller's own `Show result` step had no `always()`.
 
-Build-and-deploy caller:
+Build-and-deploy caller — two jobs, and only the first is privileged:
 
 ```yaml
-deploy:
+build:
   needs: test
   permissions:
     contents: read
     packages: write
+  uses: dustfeather/shared-workflows/.github/workflows/build-push-image.yml@v4
+  with:
+    runner: arc-itguys-ro-apps-page
+
+deploy:
+  needs: build
+  permissions:
+    contents: read
   uses: dustfeather/shared-workflows/.github/workflows/deploy-k8s.yml@v4
   with:
     namespace: apps-page
     runner: arc-itguys-ro-apps-page
     setup-kubectl: true
     ensure-namespace: none
-    build-image: true
+    image: ${{ needs.build.outputs.image }}
     manifests: deploy/service.yaml
     templated-manifests: deploy/deployment.yaml
     rollout-targets: deployment/apps-page
