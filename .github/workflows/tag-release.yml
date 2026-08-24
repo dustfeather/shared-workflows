@@ -10,15 +10,20 @@ name: Tag release
 #     minor grows without bound — major is NEVER bumped automatically,
 #     because a major bump can break `@vN` callers.
 #
-#   Manual override — put one of these tokens in the HEAD commit's subject
-#   line when you want a bigger bump for the use case at hand:
+#   Manual override — put one of these tokens in a commit message when you
+#   want a bigger bump for the use case at hand:
 #     #major  -> major += 1, minor = 0, patch = 0   (deliberate only)
 #     #minor  -> minor += 1, patch = 0
 #     #patch  -> patch += 1                          (identical to default)
-#   If several appear, the largest wins. The match is a fixed-string search
-#   of the HEAD commit message only, so a token mentioned in an older commit
-#   won't affect anything — but don't write these tokens verbatim in a commit
-#   subject unless you mean them.
+#   If several appear, the largest wins. The match is a fixed-string search of
+#   subject AND body, across every commit in the push being tagged — not only
+#   HEAD. That distinction matters: GitHub fires exactly one run per push, at
+#   the head SHA, so reading only HEAD silently discards a token carried by an
+#   earlier commit in a batch. That is how deploy-k8s.yml — a whole new
+#   reusable workflow, marked #minor — shipped under a patch tag (v4.3.3).
+#
+#   Don't write these tokens verbatim unless you mean them, and note the
+#   widened scope: a token anywhere in the batch now counts.
 on:
   push:
     branches: [main]
@@ -40,6 +45,8 @@ jobs:
 
       - name: Compute next version
         id: ver
+        env:
+          BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
           git fetch --tags --force --quiet
@@ -50,8 +57,21 @@ jobs:
           latest=${latest:-0.0.0}
           IFS=. read -r major minor patch <<<"$latest"
 
-          # Manual override token in the HEAD commit subject (fixed-string match).
-          msg=$(git log -1 --format='%s%n%b' HEAD)
+          # Manual override token in ANY commit of THIS push (fixed-string match).
+          # One push of N commits fires one run, at the head SHA — so reading
+          # only HEAD drops a token carried by an earlier commit in the batch.
+          # Falls back to HEAD when the range is unusable: a first push to a new
+          # branch (`before` is all-zeros), a force-push that orphaned the old
+          # commit, or a re-run after history was rewritten.
+          if [ -n "${BEFORE:-}" ] \
+             && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+             && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            msg=$(git log --format='%s%n%b' "${BEFORE}..${GITHUB_SHA}")
+            echo "Scanning $(git rev-list --count "${BEFORE}..${GITHUB_SHA}") commit(s) in this push for a bump token."
+          else
+            msg=$(git log -1 --format='%s%n%b' HEAD)
+            echo "No usable push range; scanning HEAD only."
+          fi
           if   printf '%s' "$msg" | grep -Fq '#major'; then bump=major
           elif printf '%s' "$msg" | grep -Fq '#minor'; then bump=minor
           else bump=patch

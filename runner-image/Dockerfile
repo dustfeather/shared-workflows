@@ -70,8 +70,14 @@ FROM ghcr.io/actions/actions-runner:${BASE_TAG}
 # build arg rather than being derived inside the image.
 ARG BASE_TAG
 ARG RUNNER_VERSION=unknown
+# org.opencontainers.image.version is overridden, not just added: the base
+# image sets it to its own Ubuntu release (24.04), and that value survives into
+# every derived image. Left alone, anything reading the standard OCI version
+# label — Renovate, a cosign policy, a skopeo drift check — gets the OS version
+# while the actual runner version hides in the non-standard label next to it.
 LABEL org.opencontainers.image.base.name="ghcr.io/actions/actions-runner:${BASE_TAG}" \
       org.opencontainers.image.source="https://github.com/dustfeather/shared-workflows" \
+      org.opencontainers.image.version="${RUNNER_VERSION}" \
       io.github.actions-runner.version="${RUNNER_VERSION}"
 
 USER root

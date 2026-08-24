@@ -8,7 +8,7 @@ No build/test; only local check = YAML parse (`python3 -c "import yaml; yaml.saf
 
 ## Versioning — pick bump by caller impact
 
-`tag-release.yml` auto-tags every push to `main`: default bumps **patch** (wraps at 100 → minor; minor uncapped), re-points the floating major tag (currently `v4`). **major never bumped automatically.** Larger bump: put `#minor` or `#major` in commit subject (largest wins). Match is fixed-string — don't write tokens verbatim unless you mean them.
+`tag-release.yml` auto-tags every push to `main`: default bumps **patch** (wraps at 100 → minor; minor uncapped), re-points the floating major tag (currently `v4`). **major never bumped automatically.** Larger bump: put `#minor` or `#major` in a commit message (largest wins). Match is fixed-string over subject+body of **every commit in the push**, not just HEAD — one push fires one run, so a HEAD-only scan would drop a token from an earlier commit in a batch. Don't write tokens verbatim unless you mean them.
 
 - **patch** — bug fix, doc/log/comment tweak, internal refactor, bumping action used inside workflow with no interface change.
 - **minor** — backwards-compatible feature: new *optional* input (with default), new workflow, opt-in job/step.
