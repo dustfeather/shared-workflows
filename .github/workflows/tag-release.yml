@@ -16,14 +16,22 @@ name: Tag release
 #     #minor  -> minor += 1, patch = 0
 #     #patch  -> patch += 1                          (identical to default)
 #   If several appear, the largest wins. The match is a fixed-string search of
-#   subject AND body, across every commit in the push being tagged — not only
-#   HEAD. That distinction matters: GitHub fires exactly one run per push, at
-#   the head SHA, so reading only HEAD silently discards a token carried by an
-#   earlier commit in a batch. That is how deploy-k8s.yml — a whole new
-#   reusable workflow, marked #minor — shipped under a patch tag (v4.3.3).
+#   the SUBJECT line of every commit in the push being tagged. Both halves of
+#   that are deliberate, and each was learned the hard way:
 #
-#   Don't write these tokens verbatim unless you mean them, and note the
-#   widened scope: a token anywhere in the batch now counts.
+#     every commit, not just HEAD — GitHub fires exactly one run per push, at
+#     the head SHA, so reading only HEAD silently discards a token carried by
+#     an earlier commit in a batch. That is how deploy-k8s.yml, a whole new
+#     reusable workflow, shipped under a patch tag.
+#
+#     subjects, not bodies — a commit body that *discusses* a bump matches
+#     itself. A commit whose only change was fixing this script, whose body
+#     explained that a token "was dropped and released as a patch", cut a
+#     spurious minor. Prose about versioning is normal in a body; a token in a
+#     subject is a decision.
+#
+#   So: don't write these tokens verbatim in a SUBJECT unless you mean them.
+#   Bodies are safe.
 on:
   push:
     branches: [main]
@@ -63,14 +71,19 @@ jobs:
           # Falls back to HEAD when the range is unusable: a first push to a new
           # branch (`before` is all-zeros), a force-push that orphaned the old
           # commit, or a re-run after history was rewritten.
+          # SUBJECTS ONLY (%s, not %s%n%b). Scanning bodies too looks harmless
+          # and is not: a commit whose body *explains* a version bump — "this
+          # dropped the #minor and released it as a patch" — matches itself and
+          # bumps the minor. That is not hypothetical; it is how v4.4.0 got
+          # created by a commit that only fixed this script.
           if [ -n "${BEFORE:-}" ] \
              && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
              && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
-            msg=$(git log --format='%s%n%b' "${BEFORE}..${GITHUB_SHA}")
-            echo "Scanning $(git rev-list --count "${BEFORE}..${GITHUB_SHA}") commit(s) in this push for a bump token."
+            msg=$(git log --format='%s' "${BEFORE}..${GITHUB_SHA}")
+            echo "Scanning $(git rev-list --count "${BEFORE}..${GITHUB_SHA}") commit subject(s) in this push for a bump token."
           else
-            msg=$(git log -1 --format='%s%n%b' HEAD)
-            echo "No usable push range; scanning HEAD only."
+            msg=$(git log -1 --format='%s' HEAD)
+            echo "No usable push range; scanning HEAD's subject only."
           fi
           if   printf '%s' "$msg" | grep -Fq '#major'; then bump=major
           elif printf '%s' "$msg" | grep -Fq '#minor'; then bump=minor
