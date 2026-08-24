@@ -101,7 +101,7 @@ jobs:
       run:
         working-directory: ${{ inputs.working-dir }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Detect package manager
         id: pm
@@ -131,12 +131,12 @@ jobs:
       # package-manager-cache is false we pass '' and setup-node does no
       # restore/save.
       - if: steps.pm.outputs.pm != 'bun'
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
           cache: ${{ inputs.package-manager-cache && steps.pm.outputs.pm || '' }}
       - if: steps.pm.outputs.pm == 'bun'
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
 

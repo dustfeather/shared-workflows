@@ -242,7 +242,7 @@ jobs:
       SECRET_LITERALS: ${{ secrets.SECRET_LITERALS }}
       GHCR_PULL_PAT: ${{ secrets.GHCR_PULL_PAT }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Resolve image reference
         id: img

@@ -157,7 +157,7 @@ jobs:
       # step-level `if:`, but `env` is.
       WORKER_SECRETS: ${{ secrets.WORKER_SECRETS }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Resolve install directory
         id: dirs
@@ -196,7 +196,7 @@ jobs:
       # No `cache:` — the ARC runners mount a persistent node-local store, so a
       # restore round-trips it through the in-cluster cache service for nothing.
       # Same reasoning as node-test.yml's package-manager-cache default.
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
 
