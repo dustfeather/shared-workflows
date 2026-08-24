@@ -510,8 +510,20 @@ jobs:
           # Events explain a stalled rollout that a pod listing only shows the
           # symptom of — ImagePullBackOff, a missing Secret, an unschedulable
           # pod. One bounded command rather than a describe per pod.
+          # Not `2>/dev/null | tail -30 || true`: that renders an RBAC denial and
+          # a genuinely event-free namespace as the identical output — a header
+          # followed by silence — which is the same trap as the `|| true` above
+          # it, on the step whose entire job is to say what went wrong.
           echo "--- recent events in ${NS} ---"
-          kubectl get events -n "$NS" --sort-by=.lastTimestamp 2>/dev/null | tail -30 || true
+          if ev="$(kubectl get events -n "$NS" --sort-by=.lastTimestamp 2>&1)"; then
+            if [ -n "$ev" ]; then
+              printf '%s\n' "$ev" | tail -30
+            else
+              echo "(no events within the cluster's event TTL)"
+            fi
+          else
+            echo "(could not list events — this is NOT 'no events': ${ev})"
+          fi
 
       - name: Summary
         if: always()
