@@ -61,7 +61,14 @@ jobs:
 
           # Highest existing vX.Y.Z tag (the bare floating "v1" has no dots so
           # the glob skips it; "^{}" derefs never appear in `git tag -l`).
-          latest=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sed 's/^v//' | sort -V | tail -1)
+          # Scoped to tags REACHABLE from the pushed ref, not the global highest.
+          # Globally-highest means that once any vN+1 tag exists anywhere, no
+          # push can ever cut vN.x again — so an accidental major permanently
+          # strands every caller pinned @vN with no way back. `--merged` also
+          # lets a release/vN branch keep cutting patches after main moves on.
+          # `fetch-depth: 0` above is what makes this work.
+          latest=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --merged "$GITHUB_SHA" \
+                   | sed 's/^v//' | sort -V | tail -1)
           latest=${latest:-0.0.0}
           IFS=. read -r major minor patch <<<"$latest"
 
@@ -91,6 +98,17 @@ jobs:
           fi
           echo "Bump: $bump (from v${major}.${minor}.${patch})"
 
+          # A major bump strands every caller pinned to the outgoing floating
+          # tag, so it must be a decision taken on the release-defining commit —
+          # not something inherited from anywhere in a push range. This fires
+          # closed: it refuses rather than quietly downgrading to minor, because
+          # a token that was meant seriously deserves an explicit re-push.
+          if [ "$bump" = major ] \
+             && ! git log -1 --format='%s' "$GITHUB_SHA" | grep -Fq '#major'; then
+            echo "::error::A major token was found in this push, but not in the head commit's subject. Refusing to cut v$((major + 1)).0.0 — it would strand every caller pinned to v${major}. Re-push with the token on the head commit subject if it is intended."
+            exit 1
+          fi
+
           case "$bump" in
             major) major=$((major + 1)); minor=0; patch=0 ;;
             minor) minor=$((minor + 1)); patch=0 ;;
@@ -109,6 +127,16 @@ jobs:
           MAJOR: ${{ steps.ver.outputs.major }}
         run: |
           set -euo pipefail
+          git fetch --tags --force --quiet
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "::error::${TAG} already exists. Another run computed the same version — refusing to move it."
+            exit 1
+          fi
+          case "$TAG" in
+            *.0.0)
+              echo "::warning::Cutting a new major line ${MAJOR}. Callers pinned to the previous major stop receiving updates until their shims are repointed."
+              ;;
+          esac
           git tag "$TAG"
           git tag -f "$MAJOR"
           git push origin "$TAG"
