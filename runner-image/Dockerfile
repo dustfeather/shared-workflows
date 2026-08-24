@@ -51,6 +51,22 @@
 ARG BASE_TAG=latest
 FROM ghcr.io/actions/actions-runner:${BASE_TAG}
 
+# Re-declared after FROM: an ARG declared before it is only in scope for the
+# FROM line itself. runner-image.yml resolves whatever
+# `ghcr.io/actions/actions-runner:latest` currently points at to a concrete
+# version tag and passes both values in, so the build is reproducible and the
+# shipped actions-runner version is greppable via
+# `docker inspect -f '{{json .Config.Labels}}'` instead of needing
+# layer-digest archaeology. Upstream declares RUNNER_VERSION as a build ARG
+# only and never persists it, so there is nothing to re-export — and a LABEL
+# cannot be filled from a RUN layer, which is why this has to arrive as a
+# build arg rather than being derived inside the image.
+ARG BASE_TAG
+ARG RUNNER_VERSION=unknown
+LABEL org.opencontainers.image.base.name="ghcr.io/actions/actions-runner:${BASE_TAG}" \
+      org.opencontainers.image.source="https://github.com/dustfeather/shared-workflows" \
+      io.github.actions-runner.version="${RUNNER_VERSION}"
+
 USER root
 
 # Keep BUN_VERSION in sync with anthropics/claude-code-action@v1's

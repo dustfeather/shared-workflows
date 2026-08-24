@@ -6,6 +6,11 @@ on:
     paths:
       - "runner-image/**"
       - ".github/workflows/runner-image.yml"
+  schedule:
+    # Weekly rebuild so the floating `ghcr.io/actions/actions-runner:latest`
+    # base is re-resolved; without it the image stays pinned to whatever
+    # `latest` was at the last manual build.
+    - cron: "0 4 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -35,17 +40,60 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Map the floating `latest` to the concrete version tag it currently
+      # points at, so the build is reproducible and the shipped
+      # actions-runner version is recorded on the image instead of having to
+      # be recovered from layer digests. Upstream publishes both `latest` and
+      # `X.Y.Z` tags for the same manifest, so the version is the tag whose
+      # digest matches. Fails loudly rather than silently falling back to
+      # `latest`: an unresolvable base is exactly the drift this guards.
+      - name: Resolve upstream actions-runner version
+        id: base
+        run: |
+          set -euo pipefail
+          img=actions/actions-runner
+          tok=$(curl -fsSL "https://ghcr.io/token?scope=repository:${img}:pull&service=ghcr.io" | jq -r .token)
+          acc='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json'
+          digest() {
+            curl -fsSL -o /dev/null -D - \
+              -H "Authorization: Bearer $tok" -H "Accept: $acc" \
+              "https://ghcr.io/v2/${img}/manifests/$1" \
+              | tr -d '\r' | awk 'tolower($1)=="docker-content-digest:"{print $2}'
+          }
+          latest=$(digest latest)
+          version=""
+          for t in $(curl -fsSL -H "Authorization: Bearer $tok" \
+                       "https://ghcr.io/v2/${img}/tags/list?n=1000" \
+                     | jq -r '.tags[] | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))' \
+                     | sort -Vr | head -20); do
+            if [ "$(digest "$t")" = "$latest" ]; then version="$t"; break; fi
+          done
+          if [ -z "$version" ]; then
+            echo "::error::cannot map ghcr.io/${img}:latest ($latest) to a version tag"
+            exit 1
+          fi
+          echo "actions-runner latest -> $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: runner-image
           file: runner-image/Dockerfile
           push: true
+          build-args: |
+            BASE_TAG=${{ steps.base.outputs.version }}
+            RUNNER_VERSION=${{ steps.base.outputs.version }}
+          # Always re-pull the base image. `cache-from` below caches the
+          # `FROM` resolution too, so without this the scheduled run would
+          # rebuild the identical digest and re-resolve nothing.
+          pull: true
           # amd64 only: the ARC node (acer-laptop) is x86_64. Add arm64
           # here if/when an arm runner joins the pool.
           platforms: linux/amd64
           tags: |
             ${{ env.IMAGE }}:latest
             ${{ env.IMAGE }}:sha-${{ github.sha }}
+            ${{ env.IMAGE }}:runner-${{ steps.base.outputs.version }}
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
