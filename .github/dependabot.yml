@@ -1,0 +1,42 @@
+version: 2
+
+# Why this file exists: the repo had `dependabot_security_updates` enabled,
+# which looks like coverage but only fires on a published advisory against a
+# detected manifest. GitHub Actions `uses:` pins are scanned ONLY through the
+# `github-actions` ecosystem below, so without this file the pins were
+# hand-maintained and drifted a full major behind on seven actions.
+
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: build
+    groups:
+      actions-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+    # Majors are deliberately excluded from automation. tag-release.yml tags
+    # EVERY push to main and re-points the floating v4 tag, so anything that
+    # merges here reaches every consumer repo on their next run. A major action
+    # bump therefore needs a human deciding the version token (#minor/#major)
+    # and checking the caller-visible break -- e.g. checkout v7 refusing to
+    # check out fork PRs under pull_request_target. Bump those by hand.
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+
+  - package-ecosystem: docker
+    directories:
+      - "/runner-image"
+      - "/k8s/ghcr-pull-refresher/image"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: build
