@@ -15,7 +15,7 @@
 # private-image pull credential, so it cannot itself rely on that
 # credential. Contains no secrets; only public tooling.
 
-FROM alpine:3.21
+FROM alpine:3.24
 
 ARG KUBECTL_VERSION=1.32.3
 
