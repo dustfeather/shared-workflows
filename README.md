@@ -315,6 +315,41 @@ deploy:
     verify-command: kubectl exec deploy/render -- fc-list ":charset=0400" | grep -q .
 ```
 
+#### `build-image: true` depends on a fix in another repo
+
+Setting `build-image: true` puts `docker buildx` in the deploy job, which needs
+a working dockerd. On the four dind scale sets — `social-update`, `invest`,
+`degoog-infra`, `apps-page` — the dind sidecar has **no startup gate**: it is a
+plain sibling container, so the kubelet starts `runner` the moment dind's
+process launches, seconds before dockerd binds its socket. The job's first
+docker call can lose that race and fail with:
+
+```
+ERROR: failed to connect to the docker API at unix:///var/run/docker.sock
+```
+
+Tracked in **[ITGuys-RO/k3s-cluster#2](https://github.com/ITGuys-RO/k3s-cluster/issues/2)**;
+the fix is a native sidecar with a `startupProbe` in that repo's
+`bootstrap/values-dind.yaml`. It is not fixable from here — a workflow step
+cannot run before `docker/setup-buildx-action` shells out to docker.
+
+This matters for migration order, because every caller that builds an image is
+also a dind set:
+
+| caller | dind set | builds an image | affected |
+| --- | --- | --- | --- |
+| `apps-page` | yes | yes | **yes** |
+| `social-update` | yes | yes | **yes** |
+| `invest` | yes | yes | **yes** |
+| `dosar-rapid.ro` | no | no | no |
+| `gw2roi` | no | no (built by a separate workflow) | no |
+
+So migrate a **non-building** caller first. An intermittent dind race during a
+first migration reads as a bug in this workflow, and debugging the wrong thing
+is the expensive part. `dosar-rapid.ro` is the right opener: no build, no
+secrets, and it exercises the `verify-command` branch. Hold the three building
+callers until k3s-cluster#2 is closed.
+
 #### Application secrets — `SECRET_LITERALS`
 
 Optional, and the same idea as `WORKER_SECRETS`: the caller composes

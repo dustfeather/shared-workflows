@@ -86,6 +86,13 @@ on:
         description: |
           Build and push a container image before deploying. OFF by default —
           callers deploying a stock upstream image have nothing to build.
+
+          Turning this ON puts docker buildx in the deploy job, which on the
+          four dind scale sets can lose a race against dockerd binding its
+          socket: the dind sidecar has no startup gate, so the runner container
+          starts before the daemon is up. Tracked in ITGuys-RO/k3s-cluster#2
+          and not fixable from here. See the README before migrating a
+          building caller.
         type: boolean
         default: false
       image-repo:
