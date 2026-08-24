@@ -280,6 +280,44 @@ jobs:
           fi
           kubectl version --client
 
+      - name: Point kubectl at the target namespace
+        run: |
+          set -eu
+          # An ARC runner authenticates with the mounted in-cluster
+          # ServiceAccount and has NO kubeconfig, so there is no current
+          # context: `kubectl config set-context --current` fails outright with
+          # "error: no current context is set", and kubectl otherwise defaults
+          # to the runner's OWN namespace (arc-runners) rather than the target.
+          #
+          # Both halves of that bite. The failure killed the verify step before
+          # the caller's command ran, reporting a successful rollout as a failed
+          # deploy; and where the same call was written `|| true`, the deploy
+          # carried on and quietly ran the diagnostics against arc-runners,
+          # which answers `pods is forbidden` instead of showing the pods that
+          # actually matter.
+          #
+          # So materialise a context when there isn't one. Done once here rather
+          # than at each call site, so every later step can simply assume the
+          # namespace default is correct.
+          if ! kubectl config current-context >/dev/null 2>&1; then
+            sa=/var/run/secrets/kubernetes.io/serviceaccount
+            if [ ! -r "$sa/token" ]; then
+              echo "::error::No kubeconfig and no in-cluster ServiceAccount token at ${sa}. This workflow authenticates as the runner pod's ServiceAccount, so it must run on a scale set inside the target cluster."
+              exit 1
+            fi
+            kubectl config set-cluster in-cluster \
+              --server="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}" \
+              --certificate-authority="${sa}/ca.crt" >/dev/null
+            kubectl config set-credentials in-cluster \
+              --token="$(cat "${sa}/token")" >/dev/null
+            kubectl config set-context in-cluster \
+              --cluster=in-cluster --user=in-cluster >/dev/null
+            kubectl config use-context in-cluster >/dev/null
+            echo "Built an in-cluster kubeconfig context (none was present)."
+          fi
+          kubectl config set-context --current --namespace="$NS" >/dev/null
+          echo "kubectl default namespace: $(kubectl config view --minify -o jsonpath='{..namespace}')"
+
       - name: Ensure namespace
         env:
           MODE: ${{ inputs.ensure-namespace }}
@@ -374,8 +412,8 @@ jobs:
           PRUNE_COMMAND: ${{ inputs.prune-command }}
         run: |
           set -eu
-          # Namespace pre-set so the caller's command needs no -n.
-          kubectl config set-context --current --namespace="$NS" >/dev/null
+          # The namespace default was established earlier in the job, so the
+          # caller's command needs no -n.
           sh -c "$PRUNE_COMMAND"
 
       - name: Apply manifests
@@ -451,7 +489,6 @@ jobs:
           VERIFY_COMMAND: ${{ inputs.verify-command }}
         run: |
           set -eu
-          kubectl config set-context --current --namespace="$NS" >/dev/null
           sh -c "$VERIFY_COMMAND"
 
       - name: Show result
@@ -462,7 +499,13 @@ jobs:
           set -u
           # always() on purpose: without it this step is skipped exactly when
           # the rollout failed, which is the only time anyone needs it.
-          kubectl config set-context --current --namespace="$NS" >/dev/null 2>&1 || true
+          #
+          # No set-context here — the namespace default is established earlier.
+          # It used to be re-set with `|| true`, which meant that when the call
+          # failed the diagnostics silently ran against the runner's own
+          # namespace and reported `pods is forbidden` instead of the pods being
+          # debugged. Swallowing an error on a diagnostics step is how you get
+          # diagnostics about the wrong thing.
           sh -c "$SHOW_COMMAND" || true
           # Events explain a stalled rollout that a pod listing only shows the
           # symptom of — ImagePullBackOff, a missing Secret, an unschedulable
