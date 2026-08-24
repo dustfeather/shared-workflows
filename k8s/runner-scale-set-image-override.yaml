@@ -11,14 +11,24 @@
 # `--reuse-values` keeps the existing release values (App secret name,
 # config URL, maxRunners, etc.) and merges these on top.
 #
-# Why only the `runner` container is set here: the chart's
-# `dind-init-container` helper auto-derives the `init-dind-externals`
-# initContainer's image from the `runner` container's image (it scans
-# `.Values.template.spec.containers` for `name: runner` and reuses its
-# `image` field). Setting `initContainers` here would NOT replace the
-# chart-injected `init-dind-externals` — the chart APPENDS user
-# `initContainers` to its own — so any explicit init-dind-externals
-# block here would duplicate it.
+# Why only the `runner` container is set here: under `containerMode: dind`
+# the chart's `dind-init-container` helper auto-derives the
+# `init-dind-externals` initContainer's image from the `runner` container's
+# image (it scans `.Values.template.spec.containers` for `name: runner` and
+# reuses its `image` field). Setting `initContainers` here would NOT replace
+# the chart-injected `init-dind-externals` — the chart APPENDS user
+# `initContainers` to its own — so any explicit init-dind-externals block
+# here would duplicate it.
+#
+# Note that the scale sets in this cluster run `containerMode: {}` with a
+# hand-rolled dind sidecar in `template.spec.containers`, so the chart's dind
+# codepath never executes for them: there is no `init-dind-externals`, and
+# nothing gates the `runner` container on dockerd being up. Ordering two
+# sibling containers does not make the second wait for the first, which is
+# why the first docker call in a job can lose the race to dockerd binding its
+# socket. The fix belongs in the scale-set values (a native sidecar with a
+# startupProbe), not in this file and not in a workflow step — a workflow
+# step cannot run before a third-party docker action does.
 #
 # `imagePullSecrets` at `template.spec.imagePullSecrets` flows through
 # the chart's generic key-passthrough (everything under

@@ -40,8 +40,11 @@ helm -n arc-runners upgrade --reuse-values <release> \
   -f values-override.yaml
 ```
 
-The `init-dind-externals` initContainer pins to the same image — Helm
-sets both from the same value, so no manual edit is needed there.
+Under `containerMode: dind` the chart's `init-dind-externals` initContainer
+pins to the same image — Helm sets both from the same value, so no manual
+edit is needed there. The scale sets in this cluster run `containerMode: {}`
+with a hand-rolled dind sidecar, so that initContainer is not created for
+them and there is nothing to keep in sync.
 
 ## Wiring the review workflow
 

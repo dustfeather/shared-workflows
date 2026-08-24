@@ -2,12 +2,19 @@
 # `claude-code-review.yml` and the other reusable workflows in this repo,
 # AND the generic in-cluster-deploy tooling (kubectl, envsubst) that scale
 # sets use to `kubectl apply` manifests against the cluster they run in
-# (e.g. ITGuys-RO/alpaca-opus-trading's deploy.yml). It is the standard
-# runner image for both the review workflows and in-cluster CI deploys.
+# (e.g. ITGuys-RO/invest's trader-deploy.yml). It is the standard runner
+# image for both the review workflows and in-cluster CI deploys.
 #
 # Layered on top of the upstream ARC runner image so the `runner` user,
-# `/home/runner/run.sh` entrypoint, and `externals/` dir (consumed by the
-# `init-dind-externals` initContainer) stay intact.
+# `/home/runner/run.sh` entrypoint, and `externals/` dir stay intact.
+#
+# On `externals/`: the chart's `init-dind-externals` initContainer copies it
+# into the dind container, so wiping it breaks `jobs.<id>.container:` and
+# `services:` — but ONLY under `containerMode: dind`. The scale sets in this
+# cluster run `containerMode: {}` with a hand-rolled dind sidecar, so that
+# initContainer does not exist for them and the copy never happens. Keep the
+# dir regardless: it costs nothing and is what makes switching to chart dind
+# mode a values change rather than an image rebuild.
 #
 # What this bakes in beyond the base image:
 #   - git (already in base, kept for clarity), jq, gh
@@ -116,7 +123,7 @@ ENV RUNNER_TOOL_CACHE=/opt/hostedtoolcache
 # pulls it in transitively, but the tarball Node ships no deps, so without
 # it `node` from the tool-cache dies with `error while loading shared
 # libraries: libatomic.so.1: cannot open shared object file` (exit 127) —
-# breaking any setup-node job, e.g. ITGuys-RO/alpaca-opus-trading's deploy.
+# breaking any setup-node job, e.g. ITGuys-RO/invest's trader-deploy.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
