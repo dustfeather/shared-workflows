@@ -14,26 +14,40 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: build
+
+    # Read this before adding an `ignore` rule for semver-major here.
+    #
+    # Every pin in this repo is a bare floating major (`actions/checkout@v7`).
+    # The dependency graph records that as the requirement `7.*.*`, which every
+    # v7 release already satisfies -- so minor and patch updates have nothing to
+    # open a PR about. A major is the ONLY update this block can ever produce.
+    # Ignoring majors here would therefore silence the block entirely, which is
+    # precisely the state this file was added to fix.
+    #
+    # A major PR is safe to let Dependabot open: no workflow in this repo calls
+    # dependabot-auto-merge.yml on itself (it is shipped to callers, not used
+    # here), so the PR waits for a human. That human still owns the decision --
+    # tag-release.yml tags every push to main and re-points the floating v4, so
+    # merging ships to every consumer on their next run. Read the changelog for
+    # the caller-visible break and pick the #minor/#major token deliberately.
+    #
+    # The group below only becomes load-bearing if pins ever move to specific
+    # versions or SHAs. Harmless until then.
     groups:
       actions-minor-patch:
         update-types:
           - minor
           - patch
 
-    # Majors are deliberately excluded from automation. tag-release.yml tags
-    # EVERY push to main and re-points the floating v4 tag, so anything that
-    # merges here reaches every consumer repo on their next run. A major action
-    # bump therefore needs a human deciding the version token (#minor/#major)
-    # and checking the caller-visible break -- e.g. checkout v7 refusing to
-    # check out fork PRs under pull_request_target. Bump those by hand.
-    ignore:
-      - dependency-name: "*"
-        update-types:
-          - version-update:semver-major
-
+  # Only the refresher image is listed. runner-image/Dockerfile is deliberately
+  # `ARG BASE_TAG=latest` -- runner-image.yml resolves :latest to a concrete
+  # version tag at build time and passes it back in, so that base is already
+  # tracked, by the build rather than by Dependabot. Listing it here would imply
+  # coverage that cannot work (Dependabot cannot bump an ARG-templated tag, and
+  # `latest` is not a version), and pinning the ARG to satisfy Dependabot would
+  # break the reproducible-build design that comment describes.
   - package-ecosystem: docker
     directories:
-      - "/runner-image"
       - "/k8s/ghcr-pull-refresher/image"
     schedule:
       interval: weekly
