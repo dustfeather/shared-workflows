@@ -1,6 +1,6 @@
 <!--
 This repo's workflows are consumed by every other repo via
-`uses: dustfeather/shared-workflows/.github/workflows/<name>.yml@v1`.
+`uses: dustfeather/shared-workflows/.github/workflows/<name>.yml@v4`.
 A merge here ships to every caller on its next workflow run. Help the
 reviewer assess that blast radius.
 -->

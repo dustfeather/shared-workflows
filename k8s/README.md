@@ -83,7 +83,7 @@ but not accepted on the installation — re-check the App page.
    counts, tolerations) and merges in the image + pull secret.
 5. Per caller repo, opt the workflow into the pre-baked binaries:
    ```yaml
-   uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v1
+   uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v4
    with:
      path-to-bun: /usr/local/bin/bun
      path-to-claude: /usr/local/bin/claude

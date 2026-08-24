@@ -50,7 +50,7 @@ sets both from the same value, so no manual edit is needed there.
 use the binaries baked into the image:
 
 ```yaml
-uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v1
+uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v4
 with:
   path-to-bun: /usr/local/bin/bun
   path-to-claude: /usr/local/bin/claude

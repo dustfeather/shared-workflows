@@ -2,7 +2,7 @@
 
 This repo hosts reusable GitHub Actions workflows that are consumed by
 every other repo under this account via `uses:
-dustfeather/shared-workflows/.github/workflows/<name>.yml@v1`. A change
+dustfeather/shared-workflows/.github/workflows/<name>.yml@v4`. A change
 that lands here ships to every caller on their next workflow run. Treat
 the blast radius accordingly.
 

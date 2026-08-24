@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Library of reusable GitHub Actions workflows (`workflow_call`) in `.github/workflows/`, consumed by every other repo under this account via `uses: dustfeather/shared-workflows/.github/workflows/<name>.yml@v1`. No app code. A merged change ships to every caller on next run — treat blast radius accordingly. Exception: `tag-release.yml` = this repo's own release automation, not callable.
+Library of reusable GitHub Actions workflows (`workflow_call`) in `.github/workflows/`, consumed by every other repo under this account via `uses: dustfeather/shared-workflows/.github/workflows/<name>.yml@v4`. No app code. A merged change ships to every caller on next run — treat blast radius accordingly. Exception: `tag-release.yml` = this repo's own release automation, not callable.
 
 ## Verifying changes
 
@@ -8,7 +8,7 @@ No build/test; only local check = YAML parse (`python3 -c "import yaml; yaml.saf
 
 ## Versioning — pick bump by caller impact
 
-`tag-release.yml` auto-tags every push to `main`: default bumps **patch** (wraps at 100 → minor; minor uncapped), re-points floating `v1` tag. **major never bumped automatically.** Larger bump: put `#minor` or `#major` in commit subject (largest wins). Match is fixed-string — don't write tokens verbatim unless you mean them.
+`tag-release.yml` auto-tags every push to `main`: default bumps **patch** (wraps at 100 → minor; minor uncapped), re-points the floating major tag (currently `v4`). **major never bumped automatically.** Larger bump: put `#minor` or `#major` in commit subject (largest wins). Match is fixed-string — don't write tokens verbatim unless you mean them.
 
 - **patch** — bug fix, doc/log/comment tweak, internal refactor, bumping action used inside workflow with no interface change.
 - **minor** — backwards-compatible feature: new *optional* input (with default), new workflow, opt-in job/step.

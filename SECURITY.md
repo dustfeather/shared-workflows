@@ -39,7 +39,7 @@ contents accordingly:
 When a caller does:
 
 ```yaml
-uses: dustfeather/shared-workflows/.github/workflows/<file>.yml@v1
+uses: dustfeather/shared-workflows/.github/workflows/<file>.yml@v4
 secrets: inherit
 ```
 
