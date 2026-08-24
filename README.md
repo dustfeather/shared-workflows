@@ -216,6 +216,149 @@ deploy-api:
       STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}
 ```
 
+### `deploy-k8s.yml` — deploy one app to the in-cluster k3s
+
+The sibling of `deploy-cloudflare.yml`, and command-shaped for the same
+reason: the callers it was derived from deploy a Deployment, a StatefulSet, a
+CronJob and a bare Service. There is no single shape to detect, so it takes
+manifest paths and shell strings.
+
+The step order is fixed:
+
+```
+build+push → namespace → pull secret → app secrets → prune
+  → apply → rollout → verify → show
+```
+
+Secrets are materialised **before** the apply on purpose. A Deployment whose
+Secret does not exist yet does not fail the apply — the pod sits in
+`CreateContainerConfigError` and `rollout status` times out with no hint why,
+which reads as a broken image rather than a missing key. The ghcr pull Secret
+comes first for the same reason: without it the pod lands in `ImagePullBackOff`
+and the rollout times out identically.
+
+**Auth is the runner pod's own ServiceAccount.** There is no `KUBECONFIG`
+input. Every caller runs on an ARC scale set inside the target cluster, where
+kubectl picks the token up with no configuration — so `runner:` must name a
+scale set in that cluster. A GitHub-hosted runner cannot use this workflow.
+
+**The permissions ceiling is the most likely first-migration failure.** A
+reusable workflow's job permissions are *intersected* with the calling job's.
+A caller setting `build-image: true` must declare `packages: write` on the
+**calling** job, or the ghcr push fails 403 — after a full image build:
+
+```yaml
+deploy:
+  permissions:
+    contents: read
+    packages: write   # required, or the push 403s
+  uses: dustfeather/shared-workflows/.github/workflows/deploy-k8s.yml@v4
+```
+
+Every input defaults to behaviour-preserving, so a minimal call is namespace +
+manifests. The ones worth knowing:
+
+| Input | Default | Note |
+| --- | --- | --- |
+| `namespace` | *required* | every kubectl call is `-n` scoped to it |
+| `ensure-namespace` | `get` | `get` asserts, `create` creates, `none` skips. `get` is the default because a per-scale-set runner SA usually cannot create namespaces at all, and `create` would trade a clear error for an RBAC denial |
+| `setup-kubectl` | `false` | the pre-baked runner image already ships kubectl and envsubst; turn on for a scale set still on the stock `actions-runner` image |
+| `build-image` | `false` | callers deploying a stock upstream image have nothing to build |
+| `manifests` | `""` | applied verbatim, in order |
+| `templated-manifests` | `""` | piped through envsubst first, applied after `manifests` |
+| `envsubst-vars` | image var only | restricts substitution. Unrestricted envsubst also eats shell-looking tokens that belong to the manifest — a snippet in an exec probe, an arg the container expects at runtime — silently replacing them with an empty string |
+| `rollout-targets` | `""` | empty skips the wait; a CronJob-only deploy has no rollout to watch |
+| `verify-command` | `""` | non-zero exit fails the deploy |
+| `show-command` | `kubectl get pods,svc` | runs with `if: always()` |
+
+`show-command` running under `always()` is not cosmetic. Without it the
+diagnostics step is skipped *exactly* when the rollout failed, so the log holds
+the timeout and nothing that explains it. The step also dumps recent namespace
+events, which is where `ImagePullBackOff` and missing-Secret failures actually
+show up. One such failure took commit archaeology to reconstruct because the
+caller's own `Show result` step had no `always()`.
+
+Build-and-deploy caller:
+
+```yaml
+deploy:
+  needs: test
+  permissions:
+    contents: read
+    packages: write
+  uses: dustfeather/shared-workflows/.github/workflows/deploy-k8s.yml@v4
+  with:
+    namespace: apps-page
+    runner: arc-itguys-ro-apps-page
+    setup-kubectl: true
+    ensure-namespace: none
+    build-image: true
+    manifests: deploy/service.yaml
+    templated-manifests: deploy/deployment.yaml
+    rollout-targets: deployment/apps-page
+    rollout-timeout: 120s
+```
+
+No-build caller with a real post-deploy assertion:
+
+```yaml
+deploy:
+  uses: dustfeather/shared-workflows/.github/workflows/deploy-k8s.yml@v4
+  with:
+    namespace: dosar-rapid-render
+    runner: arc-df-dosar-rapid
+    manifests: |
+      deploy/render/service.yaml
+      deploy/render/deployment.yaml
+    rollout-targets: deployment/render
+    rollout-timeout: 300s
+    verify-command: kubectl exec deploy/render -- fc-list ":charset=0400" | grep -q .
+```
+
+#### Application secrets — `SECRET_LITERALS`
+
+Optional, and the same idea as `WORKER_SECRETS`: the caller composes
+`KEY=VALUE` lines from its own GitHub secrets, and the workflow upserts them
+as one generic Secret named by `secret-name`. Applied via a client-side dry
+run piped into `apply`, so it is idempotent. Only the key **names** are ever
+logged.
+
+```yaml
+  with:
+    namespace: social-update
+    secret-name: social-update-secrets
+  secrets:
+    SECRET_LITERALS: |
+      CLAUDE_CODE_OAUTH_TOKEN=${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+```
+
+`GHCR_PULL_PAT` is only needed when `ghcr-pull-secret` is set, i.e. the
+namespace pulls a **private** ghcr image. It must be a classic PAT with
+`read:packages` — a GitHub App installation token cannot be granted access to
+a user-owned package and pulls 403 with a token that is otherwise valid.
+Making the package public removes the need entirely.
+
+Both secrets must be passed **explicitly** by cross-owner (`ITGuys-RO/*`)
+callers; `secrets: inherit` does not reliably carry org-level
+selected-visibility secrets across the owner boundary.
+
+#### What not to migrate
+
+A `workflow_call` hands the caller a **job**, not a step, so any repo needing
+its own steps *interleaved* with these cannot use it without smuggling them in
+as shell strings. Three known cases:
+
+- **A deploy with app-specific observability steps** (Grafana dashboard and
+  alert provisioning, deliberately soft-failing) would drag three
+  single-caller secrets into this workflow's surface. Split it instead: this
+  workflow for image+secrets+apply, a second job `needs: deploy` in the
+  caller's own repo for the rest.
+- **A repo needing two distinct Secrets**, one of which mixes secret and
+  non-secret literals, cannot express that through one `SECRET_LITERALS` blob.
+- **A Helm-based pipeline** (`helm upgrade --install --atomic`, SA
+  impersonation, `--dry-run=server` diffing in PR checks) is a different
+  problem. If it is ever wanted it is a separate `deploy-helm.yml`.
+
 ## Usage
 
 Each calling repo has a tiny shim. The shim handles trigger configuration

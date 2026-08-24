@@ -1,0 +1,539 @@
+name: Deploy to Kubernetes (reusable)
+
+# Deploys one app to the in-cluster k3s from an ARC runner running inside it.
+#
+# Like deploy-cloudflare.yml this is command-shaped, not framework-shaped: it
+# takes manifest paths and shell strings rather than trying to infer what the
+# caller ships. The callers it was derived from deploy a Deployment, a
+# StatefulSet, a CronJob and a bare Service — there is no single shape to infer.
+#
+# Ordering is NOT configurable, because getting it wrong fails silently rather
+# than loudly:
+#
+#   build+push -> namespace -> pull secret -> app secrets -> prune
+#     -> apply -> rollout -> verify -> show
+#
+# Secrets are materialised BEFORE the apply on purpose. A Deployment whose
+# Secret does not exist yet does not fail the apply — the pod sits in
+# CreateContainerConfigError and `rollout status` reports a timeout with no
+# hint as to why, which reads as a broken image rather than a missing key.
+# The ghcr pull Secret comes first for the same reason: without it the pod
+# lands in ImagePullBackOff and the rollout times out identically.
+#
+# AUTH: in-cluster ServiceAccount only. Every live caller runs on an ARC scale
+# set inside the target cluster, where kubectl picks up the pod's SA token with
+# no configuration. There is deliberately no KUBECONFIG input — adding one
+# later is a backwards-compatible minor bump, so it is not worth carrying an
+# unused credential path now.
+#
+# `show-command` runs with `if: always()`. That is not cosmetic. When a rollout
+# times out, a diagnostics step without `always()` is SKIPPED, so the run log
+# records the timeout and nothing about why — the pod state that explains it is
+# gone. Recovering one such failure from ITGuys-RO/apps-page (2026-06-17) took
+# commit archaeology because the `Show result` step never ran.
+#
+# PERMISSIONS CEILING: a reusable workflow's job permissions are INTERSECTED
+# with the calling job's. A caller setting `build-image: true` must declare
+# `permissions: { contents: read, packages: write }` on the calling job, or the
+# ghcr push fails 403 — after a full image build. This is the most likely
+# first-migration failure; see the README.
+
+on:
+  workflow_call:
+    inputs:
+      # --- placement -----------------------------------------------------
+      namespace:
+        description: Target namespace. Every kubectl call is scoped to it with `-n`.
+        type: string
+        required: true
+      working-dir:
+        description: |
+          Directory that manifest paths and the build context resolve against.
+        type: string
+        default: "."
+      environment:
+        description: |
+          GitHub environment to run the deploy job in. Empty (the default) runs
+          with no environment, which is the prior behaviour. Set it to attach
+          protection rules or environment-scoped secrets.
+        type: string
+        default: ""
+      runner:
+        description: |
+          Self-hosted ARC scale-set label for the runner pool. Must be a scale
+          set inside the target cluster — auth is the runner pod's own
+          ServiceAccount, so a GitHub-hosted runner cannot reach the cluster.
+        type: string
+        default: "arc-df-shared-workflows"
+
+      # --- tooling -------------------------------------------------------
+      setup-kubectl:
+        description: |
+          Install kubectl with azure/setup-kubectl. OFF by default: the pre-baked
+          runner image (runner-image/Dockerfile) already ships kubectl and
+          envsubst. Turn it ON for a scale set still on the stock
+          `actions-runner` image, where kubectl is absent and the apply dies
+          with `kubectl: command not found`.
+        type: boolean
+        default: false
+      kubectl-version:
+        description: Version for setup-kubectl. Empty uses the action's default.
+        type: string
+        default: ""
+
+      # --- image build ---------------------------------------------------
+      build-image:
+        description: |
+          Build and push a container image before deploying. OFF by default —
+          callers deploying a stock upstream image have nothing to build.
+        type: boolean
+        default: false
+      image-repo:
+        description: |
+          Image repo without a tag. Empty derives `ghcr.io/<owner>/<repo>`
+          lowercased, which is what most callers want. Set it when the image
+          name differs from the repo name (a monorepo shipping several images).
+        type: string
+        default: ""
+      image-tag:
+        description: Tag for the built image. Empty uses the commit SHA.
+        type: string
+        default: ""
+      docker-context:
+        description: Build context, relative to `working-dir`.
+        type: string
+        default: "."
+      dockerfile:
+        description: |
+          Dockerfile path relative to `working-dir`. Empty uses
+          `<docker-context>/Dockerfile`.
+        type: string
+        default: ""
+      build-cache:
+        description: |
+          Push and reuse a registry build cache at `<image-repo>:buildcache`.
+        type: boolean
+        default: true
+
+      # --- namespace and secrets -----------------------------------------
+      ensure-namespace:
+        description: |
+          `get` (the default) asserts the namespace exists and fails with a
+          clear message if not; `create` creates it when absent; `none` skips
+          the check.
+
+          `get` is the default rather than `create` because the per-scale-set
+          runner SA is normally bound to a Role scoped to one namespace and
+          cannot create namespaces at all — so `create` would trade a clear
+          "namespace missing" error for an RBAC denial.
+        type: string
+        default: get
+      secret-name:
+        description: |
+          Name of a generic Secret built from the `SECRET_LITERALS` secret and
+          upserted into the namespace before the apply. Empty skips the step.
+        type: string
+        default: ""
+      ghcr-pull-secret:
+        description: |
+          Name of a docker-registry Secret to upsert from `GHCR_PULL_PAT`, for a
+          namespace pulling a PRIVATE ghcr image. Empty skips the step.
+
+          A classic PAT with `read:packages` is the only credential ghcr accepts
+          here. A GitHub App installation token cannot be granted access to a
+          user-owned package and pulls 403 with a token that is otherwise valid.
+          Making the package public removes the need for this entirely.
+        type: string
+        default: ""
+
+      # --- manifests -----------------------------------------------------
+      prune-command:
+        description: |
+          Shell run after the namespace guard and before the apply, to remove
+          resources a plain apply would orphan rather than replace — e.g.
+          deleting CronJobs by label before re-applying them. Runs with the
+          namespace already set as the default, so `-n` is not needed. Empty
+          skips it.
+        type: string
+        default: ""
+      manifests:
+        description: |
+          Newline-separated manifest paths, relative to `working-dir`, applied
+          verbatim in the order given.
+        type: string
+        default: ""
+      templated-manifests:
+        description: |
+          Newline-separated manifest paths piped through envsubst before being
+          applied, applied after `manifests`. Use for a manifest carrying an
+          IMAGE placeholder.
+        type: string
+        default: ""
+      envsubst-vars:
+        description: |
+          SHELL-FORMAT argument restricting which variables envsubst replaces.
+          The default limits it to the image placeholder alone, reproducing a
+          targeted `sed` substitution exactly. Unrestricted envsubst would also
+          eat any other shell-looking token that belongs to the manifest — a
+          snippet inside an exec probe, an argument referencing a variable the
+          container expects at runtime — silently replacing it with an empty
+          string. Set this to "" for unrestricted substitution.
+        type: string
+        default: "$IMAGE"
+      server-side:
+        description: Use `kubectl apply --server-side`.
+        type: boolean
+        default: false
+
+      # --- rollout and verification --------------------------------------
+      rollout-targets:
+        description: |
+          Newline-separated `kind/name` to wait on, e.g. a Deployment or a
+          StatefulSet. Empty skips the wait — a CronJob-only deploy has no
+          rollout to watch, and its success criterion is that the apply exited
+          0.
+        type: string
+        default: ""
+      rollout-timeout:
+        description: Per-target timeout passed to `kubectl rollout status`.
+        type: string
+        default: "120s"
+      verify-command:
+        description: |
+          Shell run after a successful rollout; a non-zero exit fails the
+          deploy. For the check that proves the thing actually works — a request
+          against the live Service, an assertion about the running container.
+          Empty skips it, but a deploy nobody checked is not a deploy anybody
+          trusts.
+        type: string
+        default: ""
+      show-command:
+        description: |
+          Final state dump. Runs with `if: always()`, so it reports on a failed
+          rollout too — which is the case it exists for.
+        type: string
+        default: "kubectl get pods,svc"
+
+    secrets:
+      SECRET_LITERALS:
+        description: |
+          KEY=VALUE lines, one per key of the Secret named by `secret-name`.
+          The caller composes this from its own repo or org secrets, the same
+          way the Worker secrets input works in deploy-cloudflare.yml. See the
+          README for a copyable example; it is not reproduced here because an
+          expression written in this description would be evaluated as one, and
+          the `secrets` context is not available in the `on:` block.
+
+          Applied with a client-side dry run piped into apply, so it is
+          idempotent. Only the key NAMES are ever printed.
+        required: false
+      GHCR_PULL_PAT:
+        description: |
+          Classic PAT with `read:packages`, used only when `ghcr-pull-secret` is
+          set. Cross-owner callers must pass this explicitly — inheriting
+          secrets does not reliably carry org-level selected-visibility secrets
+          across an owner boundary.
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ${{ inputs.runner }}
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      packages: write
+    env:
+      NS: ${{ inputs.namespace }}
+      # Lifted to job level because the `secrets` context is not available in a
+      # step-level `if:`, but `env` is.
+      SECRET_LITERALS: ${{ secrets.SECRET_LITERALS }}
+      GHCR_PULL_PAT: ${{ secrets.GHCR_PULL_PAT }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Resolve image reference
+        id: img
+        env:
+          IMAGE_REPO: ${{ inputs.image-repo }}
+          IMAGE_TAG: ${{ inputs.image-tag }}
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          WORKING_DIR: ${{ inputs.working-dir }}
+          DOCKER_CONTEXT: ${{ inputs.docker-context }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
+        run: |
+          set -eu
+          # Resolved even when build-image is false: a caller can still deploy a
+          # manifest templated with an image reference that some other workflow
+          # pushed.
+          repo="$IMAGE_REPO"
+          if [ -z "$repo" ]; then
+            # ghcr rejects an uppercase path segment, and GitHub repo names are
+            # not case-normalised.
+            repo="ghcr.io/$(printf '%s' "$REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          fi
+          tag="${IMAGE_TAG:-$SHA}"
+
+          context="$WORKING_DIR/$DOCKER_CONTEXT"
+          if [ -n "$DOCKERFILE" ]; then
+            file="$WORKING_DIR/$DOCKERFILE"
+          else
+            file="$context/Dockerfile"
+          fi
+
+          {
+            echo "repo=${repo}"
+            echo "ref=${repo}:${tag}"
+            echo "context=${context}"
+            echo "file=${file}"
+          } >> "$GITHUB_OUTPUT"
+          # Exported for envsubst in the apply step.
+          echo "IMAGE=${repo}:${tag}" >> "$GITHUB_ENV"
+          echo "Image: ${repo}:${tag}"
+
+      - if: inputs.build-image
+        uses: docker/setup-buildx-action@v3
+
+      - if: inputs.build-image
+        name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - if: inputs.build-image
+        name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ steps.img.outputs.context }}
+          file: ${{ steps.img.outputs.file }}
+          push: true
+          tags: ${{ steps.img.outputs.ref }}
+          cache-from: ${{ inputs.build-cache && format('type=registry,ref={0}:buildcache', steps.img.outputs.repo) || '' }}
+          cache-to: ${{ inputs.build-cache && format('type=registry,ref={0}:buildcache,mode=max', steps.img.outputs.repo) || '' }}
+
+      - if: inputs.setup-kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: ${{ inputs.kubectl-version }}
+
+      - name: Check kubectl is available
+        run: |
+          set -eu
+          # Caught here rather than at the first apply, where a missing kubectl
+          # surfaces as a bare exit 127 partway through a deploy that has
+          # already pushed an image.
+          if ! command -v kubectl >/dev/null 2>&1; then
+            echo "::error::kubectl is not on PATH. This scale set runs an image without it — set setup-kubectl: true, or move the scale set to the pre-baked runner image."
+            exit 1
+          fi
+          kubectl version --client
+
+      - name: Ensure namespace
+        env:
+          MODE: ${{ inputs.ensure-namespace }}
+        run: |
+          set -eu
+          case "$MODE" in
+            none)
+              echo "Namespace check skipped."
+              ;;
+            get)
+              if ! kubectl get namespace "$NS" >/dev/null 2>&1; then
+                echo "::error::Namespace '${NS}' does not exist, or this runner's ServiceAccount cannot see it. Create it out of band, or set ensure-namespace: create if the SA is allowed to."
+                exit 1
+              fi
+              echo "Namespace '${NS}' exists."
+              ;;
+            create)
+              kubectl get namespace "$NS" >/dev/null 2>&1 \
+                || kubectl create namespace "$NS"
+              ;;
+            *)
+              echo "::error::ensure-namespace must be one of: none, get, create (got '${MODE}')"
+              exit 1
+              ;;
+          esac
+
+      - if: inputs.ghcr-pull-secret != ''
+        name: Upsert the ghcr pull secret
+        env:
+          PULL_SECRET: ${{ inputs.ghcr-pull-secret }}
+        run: |
+          set -eu
+          if [ -z "${GHCR_PULL_PAT:-}" ]; then
+            echo "::error::ghcr-pull-secret is set to '${PULL_SECRET}' but the GHCR_PULL_PAT secret is empty. A cross-owner caller must pass it explicitly; inheriting secrets does not reliably carry org-level selected-visibility secrets across an owner boundary."
+            exit 1
+          fi
+          kubectl create secret docker-registry "$PULL_SECRET" \
+            -n "$NS" \
+            --docker-server=ghcr.io \
+            --docker-username="${GITHUB_ACTOR}" \
+            --docker-password="$GHCR_PULL_PAT" \
+            --dry-run=client -o yaml | kubectl apply -n "$NS" -f -
+          echo "Pull secret '${PULL_SECRET}' upserted in '${NS}'."
+
+      - if: inputs.secret-name != ''
+        name: Upsert application secret
+        env:
+          SECRET_NAME: ${{ inputs.secret-name }}
+        run: |
+          set -eu
+          if [ -z "${SECRET_LITERALS:-}" ]; then
+            echo "::error::secret-name is set to '${SECRET_NAME}' but SECRET_LITERALS is empty. Expected KEY=VALUE lines, one per key."
+            exit 1
+          fi
+
+          # The loop must run in THIS shell, not a subshell, or the accumulated
+          # positional args are lost — hence a heredoc rather than a pipe.
+          set --
+          names=""
+          while IFS= read -r line; do
+            case "$line" in
+              ''|\#*) continue ;;
+            esac
+            case "$line" in
+              *=*) ;;
+              *)
+                echo "::error::SECRET_LITERALS contains a line that is not KEY=VALUE."
+                exit 1
+                ;;
+            esac
+            set -- "$@" "--from-literal=$line"
+            names="${names} ${line%%=*}"
+          done <<EOF
+          ${SECRET_LITERALS}
+          EOF
+
+          if [ "$#" -eq 0 ]; then
+            echo "::error::SECRET_LITERALS was set but no KEY=VALUE pairs could be parsed from it."
+            exit 1
+          fi
+
+          # Names only, never the values. The client-side dry run writes the
+          # rendered Secret to the pipe, not to the log.
+          echo "Upserting secret '${SECRET_NAME}' with key(s):${names}"
+          kubectl create secret generic "$SECRET_NAME" -n "$NS" "$@" \
+            --dry-run=client -o yaml | kubectl apply -n "$NS" -f -
+
+      - if: inputs.prune-command != ''
+        name: Prune superseded resources
+        working-directory: ${{ inputs.working-dir }}
+        env:
+          PRUNE_COMMAND: ${{ inputs.prune-command }}
+        run: |
+          set -eu
+          # Namespace pre-set so the caller's command needs no -n.
+          kubectl config set-context --current --namespace="$NS" >/dev/null
+          sh -c "$PRUNE_COMMAND"
+
+      - name: Apply manifests
+        working-directory: ${{ inputs.working-dir }}
+        env:
+          MANIFESTS: ${{ inputs.manifests }}
+          TEMPLATED: ${{ inputs.templated-manifests }}
+          ENVSUBST_VARS: ${{ inputs.envsubst-vars }}
+          SERVER_SIDE: ${{ inputs.server-side }}
+        run: |
+          set -eu
+          apply_args=""
+          [ "$SERVER_SIDE" = "true" ] && apply_args="--server-side"
+
+          applied=0
+
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            if [ ! -f "$f" ]; then
+              echo "::error::manifest not found: ${f}"
+              exit 1
+            fi
+            echo "apply ${f}"
+            # shellcheck disable=SC2086
+            kubectl apply -n "$NS" $apply_args -f "$f"
+            applied=$((applied + 1))
+          done <<EOF
+          ${MANIFESTS}
+          EOF
+
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            if [ ! -f "$f" ]; then
+              echo "::error::templated manifest not found: ${f}"
+              exit 1
+            fi
+            echo "apply ${f} (via envsubst)"
+            if [ -n "$ENVSUBST_VARS" ]; then
+              envsubst "$ENVSUBST_VARS" < "$f"
+            else
+              envsubst < "$f"
+            fi | kubectl apply -n "$NS" $apply_args -f -
+            applied=$((applied + 1))
+          done <<EOF
+          ${TEMPLATED}
+          EOF
+
+          if [ "$applied" -eq 0 ]; then
+            echo "::error::No manifests were applied — both manifest inputs are empty, so this deploy would report success having changed nothing."
+            exit 1
+          fi
+          echo "Applied ${applied} manifest(s) to '${NS}'."
+
+      - if: inputs.rollout-targets != ''
+        name: Wait for rollout
+        env:
+          TARGETS: ${{ inputs.rollout-targets }}
+          TIMEOUT: ${{ inputs.rollout-timeout }}
+        run: |
+          set -eu
+          while IFS= read -r t; do
+            [ -z "$t" ] && continue
+            echo "rollout status ${t} (timeout ${TIMEOUT})"
+            kubectl rollout status "$t" -n "$NS" --timeout="$TIMEOUT"
+          done <<EOF
+          ${TARGETS}
+          EOF
+
+      - if: inputs.verify-command != ''
+        name: Verify the deployment
+        working-directory: ${{ inputs.working-dir }}
+        env:
+          VERIFY_COMMAND: ${{ inputs.verify-command }}
+        run: |
+          set -eu
+          kubectl config set-context --current --namespace="$NS" >/dev/null
+          sh -c "$VERIFY_COMMAND"
+
+      - name: Show result
+        if: always()
+        env:
+          SHOW_COMMAND: ${{ inputs.show-command }}
+        run: |
+          set -u
+          # always() on purpose: without it this step is skipped exactly when
+          # the rollout failed, which is the only time anyone needs it.
+          kubectl config set-context --current --namespace="$NS" >/dev/null 2>&1 || true
+          sh -c "$SHOW_COMMAND" || true
+          # Events explain a stalled rollout that a pod listing only shows the
+          # symptom of — ImagePullBackOff, a missing Secret, an unschedulable
+          # pod. One bounded command rather than a describe per pod.
+          echo "--- recent events in ${NS} ---"
+          kubectl get events -n "$NS" --sort-by=.lastTimestamp 2>/dev/null | tail -30 || true
+
+      - name: Summary
+        if: always()
+        env:
+          IMAGE_REF: ${{ steps.img.outputs.ref }}
+          BUILD_IMAGE: ${{ inputs.build-image }}
+          TARGETS: ${{ inputs.rollout-targets }}
+        run: |
+          set -eu
+          {
+            echo "### Kubernetes deploy — \`${NS}\`"
+            [ "$BUILD_IMAGE" = "true" ] && echo "- image: \`${IMAGE_REF}\`"
+            [ -n "$TARGETS" ] && echo "- rollout: $(printf '%s' "$TARGETS" | tr '\n' ' ')"
+            true
+          } >> "$GITHUB_STEP_SUMMARY"
