@@ -88,7 +88,7 @@ on:
         type: boolean
         default: false
       kubectl-version:
-        description: Version for setup-kubectl. Empty uses the action's default.
+        description: Version for setup-kubectl. Empty falls back to "latest".
         type: string
         default: ""
 
@@ -293,7 +293,7 @@ jobs:
       - if: inputs.setup-kubectl
         uses: azure/setup-kubectl@v5
         with:
-          version: ${{ inputs.kubectl-version }}
+          version: ${{ inputs.kubectl-version || 'latest' }}
 
       - name: Check kubectl is available
         run: |
