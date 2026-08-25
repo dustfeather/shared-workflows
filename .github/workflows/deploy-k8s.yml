@@ -174,6 +174,33 @@ on:
         type: boolean
         default: false
 
+      post-apply-command:
+        description: |
+          Shell run after the manifests are applied and before the rollout
+          wait, so `rollout-targets` watches whatever it triggers. Empty skips
+          it. The namespace default is already set, so the command needs no
+          `-n`.
+
+          The case this exists for is rotating a credential. A Secret consumed
+          through `secretKeyRef` becomes an environment variable, and
+          environment variables are injected at container start and never
+          refreshed in a running pod. Upserting the Secret alone therefore
+          changes nothing the workload can see: re-running a deploy on an
+          unchanged commit produces a byte-identical pod template, `kubectl
+          apply` is a no-op, no rollout happens, and the pod keeps serving the
+          old credential. Nothing fails, which is what makes it easy to miss.
+
+          `kubectl rollout restart deployment/<name>` here fixes that — it
+          patches a pod-template annotation, which is a real change, so a
+          rollout occurs and the new pod reads the new Secret. `patch` on
+          `deployments` is the verb it needs, which an in-namespace CI Role
+          that already runs `rollout status` will normally hold.
+
+          A Secret mounted as a volume does not need this: kubelet refreshes
+          those in place.
+        type: string
+        default: ""
+
       # --- rollout and verification --------------------------------------
       rollout-targets:
         description: |
@@ -466,6 +493,17 @@ jobs:
             exit 1
           fi
           echo "Applied ${applied} manifest(s) to '${NS}'."
+
+      - if: inputs.post-apply-command != ''
+        name: Run post-apply command
+        working-directory: ${{ inputs.working-dir }}
+        env:
+          POST_APPLY_COMMAND: ${{ inputs.post-apply-command }}
+        run: |
+          set -eu
+          # Deliberately before the rollout wait, so that a restart triggered
+          # here is what `rollout status` blocks on rather than racing it.
+          sh -c "$POST_APPLY_COMMAND"
 
       - if: inputs.rollout-targets != ''
         name: Wait for rollout
