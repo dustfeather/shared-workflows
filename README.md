@@ -402,6 +402,16 @@ switch. An input listing them would be a second place for the same list to be
 written and a chance for the two to disagree, and it would reveal nothing that
 is not already logged.
 
+**An empty value is an error**, unless `allow-empty-secret-values: true`. An
+unset GitHub secret interpolates to the empty string, so without that check a
+caller who forgot to set one gets a Secret with the right key and an empty
+value — the apply succeeds, the pod starts, and the workload authenticates
+with `""` against whatever it talks to. Every hand-written deploy this
+workflow replaced opened with a `test -n` guard for that reason, and this is
+where the guard went. `SECRET_LITERALS` is deliberately *not* covered: it has
+always permitted empty values, so tightening it would be a breaking change
+rather than a new default.
+
 `SECRETS_MANIFEST` and `secret-name` are independent; use either, both, or
 neither. If a caller composes it entirely from GitHub secrets that are all
 unset, the step fails with "no `[secret-name]` section could be parsed" rather
