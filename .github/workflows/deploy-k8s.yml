@@ -114,16 +114,23 @@ on:
       # --- namespace and secrets -----------------------------------------
       ensure-namespace:
         description: |
-          `get` (the default) asserts the namespace exists and fails with a
-          clear message if not; `create` creates it when absent; `none` skips
-          the check.
+          `none` (the default) skips the check; `get` asserts the namespace
+          exists and fails with a clear message if not; `create` creates it
+          when absent.
 
-          `get` is the default rather than `create` because the per-scale-set
-          runner SA is normally bound to a Role scoped to one namespace and
-          cannot create namespaces at all — so `create` would trade a clear
-          "namespace missing" error for an RBAC denial.
+          `none` is the default because BOTH other modes need a permission the
+          per-scale-set runner SA normally lacks. `namespaces` is a
+          CLUSTER-scoped resource, and RBAC will not authorize a cluster-scoped
+          resource through a RoleBinding however the Role is written — so a SA
+          bound only to a Role in the target namespace cannot `get` a namespace
+          any more than it can create one. `get` therefore bought nothing: it
+          turned a pre-created, admin-owned namespace into an RBAC denial
+          before the deploy did any work (ITGuys-RO/apps-page, 2026-08-25).
+
+          Set `get` only where the SA holds a ClusterRole granting namespace
+          read; a missing namespace otherwise surfaces on the apply.
         type: string
-        default: get
+        default: none
       secret-name:
         description: |
           Name of a generic Secret built from the `SECRET_LITERALS` secret and
