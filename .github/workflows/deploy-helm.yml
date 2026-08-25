@@ -1,0 +1,536 @@
+name: Deploy a Helm release (reusable)
+
+# Installs or upgrades one Helm release against the in-cluster k3s from an ARC
+# runner running inside it, and optionally validates a chart without touching
+# the cluster.
+#
+# This is the third carve-out named in deploy-k8s.yml's "what not to migrate"
+# list, promoted to its own workflow rather than folded into that one. A Helm
+# pipeline is not a `kubectl apply` pipeline with extra flags: the unit of
+# change is a release rather than a file, the ordering constraints are Helm's,
+# and the useful pre-flight (`lint` plus `template | apply --dry-run=client`)
+# has no counterpart in a manifest apply. Bolting it onto deploy-k8s.yml would
+# have doubled that workflow's input surface for every caller that never
+# installs a chart.
+#
+# Ordering is fixed:
+#
+#   repo add/update -> lint -> template check -> upgrade
+#     -> post-upgrade -> rollout -> verify -> show
+#
+# VALIDATE AND DEPLOY ARE THE SAME WORKFLOW, called twice. A PR check runs it
+# with `upgrade: false, lint: true, template-check: true` and writes nothing; a
+# deploy runs it with the defaults. Keeping both in one workflow is what stops
+# the gate and the deploy drifting apart — a validation step that lints a
+# different chart version than the one being installed is worse than no gate,
+# because it is green.
+#
+# `template-check` is NOT offline, and that surprises people. `kubectl apply
+# --dry-run=client` still GETs the live object to compute the merge patch, so
+# it needs a reachable API server and a namespace the runner's ServiceAccount
+# can read. It is a schema-and-RBAC gate, not a parser.
+#
+# AUTH: in-cluster ServiceAccount only, exactly as in deploy-k8s.yml — helm
+# reads the same kubeconfig kubectl does, so the context this workflow
+# materialises serves both. There is deliberately no KUBECONFIG input; adding
+# one later is a backwards-compatible minor bump.
+#
+# SECRETS: this workflow has none, and that is deliberate rather than an
+# oversight. The Helm caller this was derived from pre-creates its Secrets —
+# several in shapes no KEY=VALUE blob can express, including a `patch --merge`
+# into a different namespace and a `--from-file` SSH key — and references them
+# from values by name. A secret-valued `--set-string` input would be dead
+# surface for it. Adding one later is a minor bump.
+#
+# PERMISSIONS: `contents: read` and nothing more, for the same hard reason as
+# deploy-k8s.yml. A called workflow may not request more GITHUB_TOKEN
+# permission than the calling job grants and `permissions:` accepts no
+# expressions, so asking for anything extra here would break every caller that
+# grants least privilege — with `startup_failure`, zero jobs and no logs, and
+# an explanation that appears in the web UI only and not in the API.
+
+on:
+  workflow_call:
+    inputs:
+      # --- placement -----------------------------------------------------
+      namespace:
+        description: Target namespace. Passed to helm and set as kubectl's default.
+        type: string
+        required: true
+      release:
+        description: Helm release name.
+        type: string
+        required: true
+      chart:
+        description: |
+          Chart reference: `<repo-name>/<chart>` when `repo-url` is set, an
+          `oci://` reference, or a chart directory inside the checkout.
+        type: string
+        required: true
+      chart-version:
+        description: |
+          Chart version to install. Empty resolves to whatever the repository
+          serves today, which makes the deploy non-reproducible — pin it. Left
+          empty, the workflow warns rather than fails, because a chart
+          directory in the checkout is already pinned by the commit.
+        type: string
+        default: ""
+      working-dir:
+        description: Directory that chart paths and values paths resolve against.
+        type: string
+        default: "."
+      environment:
+        description: |
+          GitHub environment to run the job in. Empty (the default) runs with
+          no environment, which is the prior behaviour.
+        type: string
+        default: ""
+      runner:
+        description: |
+          Self-hosted ARC scale-set label. Must be a scale set inside the
+          target cluster — auth is the runner pod's own ServiceAccount, so a
+          GitHub-hosted runner cannot reach the cluster.
+        type: string
+        default: "arc-df-shared-workflows"
+
+      # --- chart repository ----------------------------------------------
+      repo-name:
+        description: |
+          Local alias for `repo-url`. Empty derives it from the first path
+          segment of `chart`, which a `<repo>/<chart>` reference already names.
+        type: string
+        default: ""
+      repo-url:
+        description: |
+          Chart repository to add and update before resolving `chart`. Empty
+          skips it, which is correct for an `oci://` reference or a local path.
+        type: string
+        default: ""
+
+      # --- tooling -------------------------------------------------------
+      setup-helm:
+        description: |
+          Install helm with azure/setup-helm. ON by default, unlike the kubectl
+          switch below: the pre-baked runner image ships kubectl and envsubst
+          but not helm.
+        type: boolean
+        default: true
+      helm-version:
+        description: Version for setup-helm. Empty falls back to "latest".
+        type: string
+        default: ""
+      setup-kubectl:
+        description: |
+          Install kubectl with azure/setup-kubectl. OFF by default: the
+          pre-baked runner image already ships it. Turn it ON for a scale set
+          still on the stock `actions-runner` image.
+        type: boolean
+        default: false
+      kubectl-version:
+        description: Version for setup-kubectl. Empty falls back to "latest".
+        type: string
+        default: ""
+
+      # --- values --------------------------------------------------------
+      values-files:
+        description: |
+          Newline-separated values files, relative to `working-dir`, passed as
+          `-f` in the order given — so later files win, as helm defines. Paths
+          are word-split, so none may contain a space.
+        type: string
+        default: ""
+      set-literals:
+        description: |
+          Newline-separated `key=value` lines passed as `--set-string`. For
+          NON-SECRET values only: they land in the run log and in `helm get
+          values`. Anything sensitive belongs in a Secret the chart references
+          by name. Word-split, so no value may contain a space.
+        type: string
+        default: ""
+      extra-args:
+        description: |
+          Extra arguments appended verbatim to `helm upgrade`. Word-split, so
+          no value may contain a space.
+        type: string
+        default: ""
+
+      # --- what to run ---------------------------------------------------
+      lint:
+        description: |
+          Run `helm lint` against the resolved chart with the same values the
+          upgrade would use. A remote chart is pulled and untarred first,
+          because helm v4 dropped `helm lint --version` on a remote reference.
+        type: boolean
+        default: false
+      template-check:
+        description: |
+          Render the chart and pipe it through `kubectl apply --dry-run=client`.
+          Catches a values file that renders structurally invalid objects. Needs
+          cluster access — see the header, this is not an offline check.
+        type: boolean
+        default: false
+      upgrade:
+        description: |
+          Run `helm upgrade --install`. Set false to use this workflow as a
+          pure validation gate in PR checks, where it writes nothing.
+        type: boolean
+        default: true
+      create-namespace:
+        description: |
+          Pass `--create-namespace`. OFF by default because a per-scale-set
+          runner SA is normally bound to a Role scoped to one namespace and
+          cannot create namespaces at all — so turning it on would trade a
+          clear "not found" for an RBAC denial.
+        type: boolean
+        default: false
+      atomic:
+        description: |
+          Pass `--atomic`, rolling the release back when the upgrade fails or
+          times out. Implies `--wait`, so `helm-timeout` becomes the time helm
+          waits for the release to report ready — and a rollback means the
+          cluster no longer holds the state that explains the failure, which is
+          why the show step below dumps events under `always()`.
+        type: boolean
+        default: false
+      helm-timeout:
+        description: Value for `helm upgrade --timeout`.
+        type: string
+        default: "5m"
+
+      # --- after the upgrade ---------------------------------------------
+      post-upgrade-command:
+        description: |
+          Shell run after the upgrade and before the rollout wait, so
+          `rollout-targets` watches whatever it triggers. The namespace default
+          is already set, so it needs no `-n`. Empty skips it.
+        type: string
+        default: ""
+      rollout-targets:
+        description: |
+          Newline-separated `kind/name` to wait on. Empty skips the wait, which
+          is right when `atomic` already waited — and is the reason the two are
+          separate knobs rather than one.
+        type: string
+        default: ""
+      rollout-timeout:
+        description: Per-target timeout passed to `kubectl rollout status`.
+        type: string
+        default: "120s"
+      verify-command:
+        description: |
+          Shell run after a successful rollout; a non-zero exit fails the
+          deploy. For the check that proves the release actually works. Empty
+          skips it, but a deploy nobody checked is not a deploy anybody trusts.
+        type: string
+        default: ""
+      show-command:
+        description: |
+          Final state dump. Runs with `if: always()`, so it reports on a failed
+          upgrade too — which is the case it exists for.
+        type: string
+        default: "kubectl get pods,svc"
+
+permissions:
+  contents: read
+
+jobs:
+  helm:
+    runs-on: ${{ inputs.runner }}
+    environment: ${{ inputs.environment }}
+    # contents: read only — see the header for why anything more would break
+    # every least-privilege caller at validation time.
+    permissions:
+      contents: read
+    env:
+      NS: ${{ inputs.namespace }}
+      RELEASE: ${{ inputs.release }}
+      CHART: ${{ inputs.chart }}
+      CHART_VERSION: ${{ inputs.chart-version }}
+      REPO_NAME: ${{ inputs.repo-name }}
+      REPO_URL: ${{ inputs.repo-url }}
+      VALUES_FILES: ${{ inputs.values-files }}
+      SET_LITERALS: ${{ inputs.set-literals }}
+      HELM_TIMEOUT: ${{ inputs.helm-timeout }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - if: inputs.setup-helm
+        uses: azure/setup-helm@v5
+        with:
+          version: ${{ inputs.helm-version || 'latest' }}
+
+      - if: inputs.setup-kubectl
+        uses: azure/setup-kubectl@v5
+        with:
+          version: ${{ inputs.kubectl-version || 'latest' }}
+
+      - name: Check helm and kubectl are available
+        run: |
+          set -eu
+          # Caught here rather than at the first helm call, where a missing
+          # binary surfaces as a bare exit 127 partway through a deploy.
+          for bin in helm kubectl; do
+            if command -v "$bin" >/dev/null 2>&1; then continue; fi
+            echo "::error::${bin} is not on PATH. This scale set runs an image without it — set setup-${bin}: true, or move the scale set to the pre-baked runner image."
+            exit 1
+          done
+          helm version --short
+          kubectl version --client
+
+      - name: Point kubectl at the target namespace
+        run: |
+          set -eu
+          # Identical to deploy-k8s.yml, and load-bearing for the same reasons.
+          # An ARC runner authenticates with the mounted in-cluster
+          # ServiceAccount and has NO kubeconfig, so there is no current
+          # context: `kubectl config set-context --current` fails outright with
+          # "error: no current context is set", and both kubectl and helm
+          # otherwise default to the runner's OWN namespace (arc-runners)
+          # rather than the target.
+          #
+          # helm is the reason this matters more here than there. `helm upgrade
+          # --namespace` scopes the release, but `helm history` and the
+          # diagnostics below read the current context, so a missing context
+          # turns the post-mortem into "release not found".
+          if ! kubectl config current-context >/dev/null 2>&1; then
+            sa=/var/run/secrets/kubernetes.io/serviceaccount
+            if [ ! -r "$sa/token" ]; then
+              echo "::error::No kubeconfig and no in-cluster ServiceAccount token at ${sa}. This workflow authenticates as the runner pod's ServiceAccount, so it must run on a scale set inside the target cluster."
+              exit 1
+            fi
+            kubectl config set-cluster in-cluster \
+              --server="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}" \
+              --certificate-authority="${sa}/ca.crt" >/dev/null
+            kubectl config set-credentials in-cluster \
+              --token="$(cat "${sa}/token")" >/dev/null
+            kubectl config set-context in-cluster \
+              --cluster=in-cluster --user=in-cluster >/dev/null
+            kubectl config use-context in-cluster >/dev/null
+            echo "Built an in-cluster kubeconfig context (none was present)."
+          fi
+          kubectl config set-context --current --namespace="$NS" >/dev/null
+          echo "kubectl default namespace: $(kubectl config view --minify -o jsonpath='{..namespace}')"
+
+      - if: inputs.repo-url != ''
+        name: Add the chart repository
+        run: |
+          set -eu
+          alias="$REPO_NAME"
+          if [ -z "$alias" ]; then
+            # `<repo>/<chart>` already names the alias; deriving it saves the
+            # caller from stating the same word twice.
+            case "$CHART" in
+              */*) alias="${CHART%%/*}" ;;
+              *)
+                echo "::error::repo-url is set but repo-name is empty and chart '${CHART}' has no '<repo>/<chart>' prefix to derive it from."
+                exit 1
+                ;;
+            esac
+          fi
+          helm repo add "$alias" "$REPO_URL"
+          # Update only this repo. A bare `helm repo update` refreshes every
+          # alias on the runner and fails the step when an unrelated one is
+          # unreachable, which on a shared scale set is somebody else's outage.
+          helm repo update "$alias"
+
+      - name: Resolve values and chart arguments
+        id: args
+        working-directory: ${{ inputs.working-dir }}
+        run: |
+          set -eu
+          # Values files are checked here rather than left to helm, because
+          # helm's message for a missing -f names the path without saying what
+          # resolved it — and `working-dir` is exactly the thing that makes a
+          # correct-looking path wrong.
+          args=""
+
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            if [ ! -f "$f" ]; then
+              echo "::error::values file not found: ${f} (resolved against working-dir '${PWD}')"
+              exit 1
+            fi
+            args="${args} -f ${f}"
+          done <<VALUES_EOF
+          ${VALUES_FILES}
+          VALUES_EOF
+
+          while IFS= read -r kv; do
+            case "$kv" in
+              ''|\#*) continue ;;
+              *=*) ;;
+              *)
+                echo "::error::set-literals contains a line that is not key=value: ${kv}"
+                exit 1
+                ;;
+            esac
+            args="${args} --set-string ${kv}"
+          done <<SET_EOF
+          ${SET_LITERALS}
+          SET_EOF
+
+          if [ -n "$CHART_VERSION" ]; then
+            args="${args} --version ${CHART_VERSION}"
+          elif [ ! -d "$CHART" ]; then
+            echo "::warning::chart-version is empty and '${CHART}' is not a directory in the checkout — this resolves to whatever the repository serves today, so the deploy is not reproducible."
+          fi
+
+          echo "args=${args}" >> "$GITHUB_OUTPUT"
+          echo "helm args:${args}"
+
+      - if: inputs.lint
+        name: Lint the chart
+        working-directory: ${{ inputs.working-dir }}
+        env:
+          ARGS: ${{ steps.args.outputs.args }}
+        run: |
+          set -eu
+          if [ -d "$CHART" ]; then
+            # shellcheck disable=SC2086
+            helm lint "$CHART" $ARGS
+            exit 0
+          fi
+
+          # helm v4 dropped `helm lint --version` against a remote reference,
+          # so a repo chart has to be materialised locally first.
+          dir="$(mktemp -d)"
+          version_arg=""
+          [ -n "$CHART_VERSION" ] && version_arg="--version ${CHART_VERSION}"
+          # shellcheck disable=SC2086
+          helm pull "$CHART" --untar --untardir "$dir" $version_arg
+
+          # `helm pull --untar` writes exactly one directory, named for the
+          # chart itself rather than for the reference used to fetch it.
+          chart_dir="$(find "$dir" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          if [ -z "$chart_dir" ]; then
+            echo "::error::helm pull produced no chart directory for '${CHART}'."
+            exit 1
+          fi
+
+          # The version is already baked into the pulled copy, and passing
+          # --version to lint is precisely what helm v4 rejects.
+          lint_args="$(printf '%s' "$ARGS" | sed 's| --version [^ ]*||')"
+          # shellcheck disable=SC2086
+          helm lint "$chart_dir" $lint_args
+
+      - if: inputs.template-check
+        name: Render the chart and dry-run it against the cluster
+        working-directory: ${{ inputs.working-dir }}
+        env:
+          ARGS: ${{ steps.args.outputs.args }}
+        run: |
+          set -eu
+          # NOT offline: `kubectl apply --dry-run=client` still GETs the live
+          # object to compute the merge patch, so this needs a reachable API
+          # server and a namespace the SA can read. The -n is not redundant
+          # with the context set earlier — it is what keeps an object whose own
+          # metadata carries no namespace from being checked against the
+          # runner's namespace instead.
+          # shellcheck disable=SC2086
+          helm template "$RELEASE" "$CHART" --namespace "$NS" $ARGS \
+            | kubectl apply -n "$NS" --dry-run=client -f -
+
+      - if: inputs.upgrade
+        name: helm upgrade --install
+        working-directory: ${{ inputs.working-dir }}
+        env:
+          ARGS: ${{ steps.args.outputs.args }}
+          EXTRA_ARGS: ${{ inputs.extra-args }}
+          ATOMIC: ${{ inputs.atomic }}
+          CREATE_NS: ${{ inputs.create-namespace }}
+        run: |
+          set -eu
+          flags=""
+          [ "$ATOMIC" = "true" ] && flags="${flags} --atomic"
+          [ "$CREATE_NS" = "true" ] && flags="${flags} --create-namespace"
+          # shellcheck disable=SC2086
+          helm upgrade --install "$RELEASE" "$CHART" \
+            --namespace "$NS" \
+            --timeout "$HELM_TIMEOUT" \
+            $ARGS $flags $EXTRA_ARGS
+
+      - if: inputs.upgrade && inputs.post-upgrade-command != ''
+        name: Run post-upgrade command
+        working-directory: ${{ inputs.working-dir }}
+        env:
+          POST_UPGRADE_COMMAND: ${{ inputs.post-upgrade-command }}
+        run: |
+          set -eu
+          # Before the rollout wait on purpose, so a restart triggered here is
+          # what `rollout status` blocks on rather than racing it.
+          sh -c "$POST_UPGRADE_COMMAND"
+
+      - if: inputs.upgrade && inputs.rollout-targets != ''
+        name: Wait for rollout
+        env:
+          TARGETS: ${{ inputs.rollout-targets }}
+          TIMEOUT: ${{ inputs.rollout-timeout }}
+        run: |
+          set -eu
+          while IFS= read -r t; do
+            [ -z "$t" ] && continue
+            echo "rollout status ${t} (timeout ${TIMEOUT})"
+            kubectl rollout status "$t" -n "$NS" --timeout="$TIMEOUT"
+          done <<TARGETS_EOF
+          ${TARGETS}
+          TARGETS_EOF
+
+      - if: inputs.upgrade && inputs.verify-command != ''
+        name: Verify the release
+        working-directory: ${{ inputs.working-dir }}
+        env:
+          VERIFY_COMMAND: ${{ inputs.verify-command }}
+        run: |
+          set -eu
+          sh -c "$VERIFY_COMMAND"
+
+      - if: always() && inputs.upgrade
+        name: Show result
+        env:
+          SHOW_COMMAND: ${{ inputs.show-command }}
+        run: |
+          set -u
+          # always() on purpose: without it this step is skipped exactly when
+          # the upgrade failed, which is the only time anyone needs it. Under
+          # --atomic that matters more than usual — helm has already rolled the
+          # release back, so the failed objects are gone and the events below
+          # are the only surviving record of why it never went ready.
+          sh -c "$SHOW_COMMAND" || true
+
+          echo "--- helm history for ${RELEASE} ---"
+          helm history "$RELEASE" -n "$NS" --max 5 \
+            || echo "(no release history — a first install that failed before recording a revision leaves none)"
+
+          echo "--- recent events in ${NS} ---"
+          # Not `2>/dev/null | tail -30 || true`: that renders an RBAC denial
+          # and a genuinely event-free namespace as the identical output — a
+          # header followed by silence — on the step whose entire job is to say
+          # what went wrong.
+          if ev="$(kubectl get events -n "$NS" --sort-by=.lastTimestamp 2>&1)"; then
+            if [ -n "$ev" ]; then
+              printf '%s\n' "$ev" | tail -30
+            else
+              echo "(no events within the cluster's event TTL)"
+            fi
+          else
+            echo "(could not list events — this is NOT 'no events': ${ev})"
+          fi
+
+      - name: Summary
+        if: always()
+        env:
+          LINT: ${{ inputs.lint }}
+          TEMPLATE_CHECK: ${{ inputs.template-check }}
+          UPGRADE: ${{ inputs.upgrade }}
+        run: |
+          set -eu
+          {
+            echo "### Helm — \`${RELEASE}\` in \`${NS}\`"
+            echo "- chart: \`${CHART}${CHART_VERSION:+ @${CHART_VERSION}}\`"
+            ran=""
+            [ "$LINT" = "true" ] && ran="${ran} lint"
+            [ "$TEMPLATE_CHECK" = "true" ] && ran="${ran} template-check"
+            [ "$UPGRADE" = "true" ] && ran="${ran} upgrade"
+            echo "- ran:${ran:- nothing}"
+            true
+          } >> "$GITHUB_STEP_SUMMARY"

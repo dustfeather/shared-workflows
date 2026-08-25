@@ -13,6 +13,13 @@ name: Deploy to Kubernetes (reusable)
 #   build+push -> namespace -> pull secret -> app secrets -> prune
 #     -> apply -> rollout -> verify -> show
 #
+# Two secret paths feed the "app secrets" stage. `secret-name` +
+# SECRET_LITERALS builds one Secret and is what most callers want;
+# SECRETS_MANIFEST builds several from one blob, for a namespace whose Secrets
+# do not collapse into one — a mixed secret/non-secret credential set, or two
+# Secrets consumed by two different workloads. They are independent, and a
+# caller may use either, both or neither.
+#
 # Secrets are materialised BEFORE the apply on purpose. A Deployment whose
 # Secret does not exist yet does not fail the apply — the pod sits in
 # CreateContainerConfigError and `rollout status` reports a timeout with no
@@ -243,6 +250,31 @@ on:
           Applied with a client-side dry run piped into apply, so it is
           idempotent. Only the key NAMES are ever printed.
         required: false
+      SECRETS_MANIFEST:
+        description: |
+          Several Secrets in one blob, for a namespace that needs more than the
+          single Secret `secret-name` can express. Each Secret is introduced by
+          a `[name]` header line and followed by its own KEY=VALUE lines;
+          blank lines and `#` comments are ignored.
+
+          There is no matching input, and that is on purpose: the presence of
+          the secret is the switch. An input naming the Secrets would be a
+          second place for the same list to be written and a chance for the two
+          to disagree, and it would not make anything visible that is not
+          already visible — the key names are logged either way, the values
+          never are.
+
+          The literals under a header need not all be secret. A Secret that
+          mixes a password with the non-secret user and database names that
+          travel with it is the case this exists for: splitting it so the
+          non-secret half could come from an input would hand the workload two
+          Secrets to mount where the chart or manifest expects one.
+
+          Independent of `secret-name`; use either, both, or neither. See the
+          README for a copyable example — one written here would be evaluated
+          as an expression, and the `secrets` context is not available in the
+          `on:` block.
+        required: false
       GHCR_PULL_PAT:
         description: |
           Classic PAT with `read:packages`, used only when `ghcr-pull-secret` is
@@ -267,6 +299,7 @@ jobs:
       # Lifted to job level because the `secrets` context is not available in a
       # step-level `if:`, but `env` is.
       SECRET_LITERALS: ${{ secrets.SECRET_LITERALS }}
+      SECRETS_MANIFEST: ${{ secrets.SECRETS_MANIFEST }}
       GHCR_PULL_PAT: ${{ secrets.GHCR_PULL_PAT }}
     steps:
       - uses: actions/checkout@v7
@@ -355,15 +388,33 @@ jobs:
               echo "Namespace check skipped."
               ;;
             get)
-              if ! kubectl get namespace "$NS" >/dev/null 2>&1; then
-                echo "::error::Namespace '${NS}' does not exist, or this runner's ServiceAccount cannot see it. Create it out of band, or set ensure-namespace: create if the SA is allowed to."
+              # Capture stderr instead of discarding it. `2>&1` here used to
+              # turn an RBAC denial into a claim that the namespace does not
+              # exist — two very different fixes, and the one piece of evidence
+              # that tells them apart was being thrown away. Recovering an
+              # apps-page failure (2026-08-25) meant re-running the deploy just
+              # to see the verb kubectl had been refused.
+              if ! err="$(kubectl get namespace "$NS" -o name 2>&1)"; then
+                echo "$err"
+                echo "::error::Namespace '${NS}' check failed — see the kubectl error above. Either it does not exist (create it out of band, or set ensure-namespace: create), or this runner's ServiceAccount lacks get on namespaces."
                 exit 1
               fi
               echo "Namespace '${NS}' exists."
               ;;
             create)
-              kubectl get namespace "$NS" >/dev/null 2>&1 \
-                || kubectl create namespace "$NS"
+              if ! err="$(kubectl get namespace "$NS" -o name 2>&1)"; then
+                # Only absence is worth recovering from. A denial reaching
+                # `kubectl create` produces a second, less specific error and
+                # buries the first.
+                case "$err" in
+                  *NotFound*|*"not found"*) kubectl create namespace "$NS" ;;
+                  *)
+                    echo "$err"
+                    echo "::error::Namespace '${NS}' could not be read, and the error is not a NotFound — see above. Creating it would only mask this."
+                    exit 1
+                    ;;
+                esac
+              fi
               ;;
             *)
               echo "::error::ensure-namespace must be one of: none, get, create (got '${MODE}')"
@@ -431,6 +482,95 @@ jobs:
           echo "Upserting secret '${SECRET_NAME}' with key(s):${names}"
           kubectl create secret generic "$SECRET_NAME" -n "$NS" "$@" \
             --dry-run=client -o yaml | kubectl apply -n "$NS" -f -
+
+      # Gated on the secret rather than on an input, because there is no input
+      # — see SECRETS_MANIFEST's description. The `secrets` context is not
+      # available in a step-level `if:`, but `env` is, and the value was lifted
+      # to job level above for exactly this.
+      - if: env.SECRETS_MANIFEST != ''
+        name: Upsert additional secrets
+        run: |
+          set -eu
+
+          # A function, because the flush has to happen twice — once per header
+          # and once at EOF — and duplicating a kubectl invocation is how the
+          # last section of a list quietly stops being applied.
+          upsert() {
+            name="$1"
+            shift
+            if [ "$#" -eq 0 ]; then
+              echo "::error::SECRETS_MANIFEST section [${name}] has no KEY=VALUE lines. An empty section would create a Secret with no keys, and the workload consuming it would fail at container start rather than here."
+              exit 1
+            fi
+            keys=""
+            for arg in "$@"; do
+              arg="${arg#--from-literal=}"
+              keys="${keys} ${arg%%=*}"
+            done
+            # Names only, never the values. The client-side dry run writes the
+            # rendered Secret to the pipe, not to the log.
+            echo "Upserting secret '${name}' with key(s):${keys}"
+            kubectl create secret generic "$name" -n "$NS" "$@" \
+              --dry-run=client -o yaml | kubectl apply -n "$NS" -f -
+          }
+
+          # The loop must run in THIS shell, not a subshell, or the accumulated
+          # positional args are lost — hence a heredoc rather than a pipe.
+          set --
+          current=""
+          count=0
+          while IFS= read -r line; do
+            # An all-whitespace line is a blank line. Worth its own test rather
+            # than folding into the '' case above: a caller composing this from
+            # GitHub secrets that are all unset yields a block of indentation,
+            # and without this it is reported as a malformed KEY=VALUE line
+            # instead of as an empty manifest.
+            [ -z "$(printf '%s' "$line" | tr -d '[:space:]')" ] && continue
+            case "$line" in
+              ''|\#*) continue ;;
+              \[*\])
+                if [ -n "$current" ]; then
+                  upsert "$current" "$@"
+                  count=$((count + 1))
+                fi
+                current="${line#[}"
+                current="${current%]}"
+                if [ -z "$current" ]; then
+                  echo "::error::SECRETS_MANIFEST has an empty section header '[]'."
+                  exit 1
+                fi
+                set --
+                continue
+                ;;
+            esac
+            if [ -z "$current" ]; then
+              # Naming the key is safe and is the only way to point at the
+              # offending line; naming the value would print a secret.
+              echo "::error::SECRETS_MANIFEST has a '${line%%=*}' line before any [secret-name] header."
+              exit 1
+            fi
+            case "$line" in
+              *=*) ;;
+              *)
+                echo "::error::SECRETS_MANIFEST section [${current}] contains a line that is not KEY=VALUE."
+                exit 1
+                ;;
+            esac
+            set -- "$@" "--from-literal=$line"
+          done <<MANIFEST_EOF
+          ${SECRETS_MANIFEST}
+          MANIFEST_EOF
+
+          if [ -n "$current" ]; then
+            upsert "$current" "$@"
+            count=$((count + 1))
+          fi
+
+          if [ "$count" -eq 0 ]; then
+            echo "::error::SECRETS_MANIFEST was set but no [secret-name] section could be parsed from it. A caller composing it from GitHub secrets that are all empty produces exactly this."
+            exit 1
+          fi
+          echo "Upserted ${count} secret(s) in '${NS}'."
 
       - if: inputs.prune-command != ''
         name: Prune superseded resources

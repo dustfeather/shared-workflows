@@ -364,26 +364,171 @@ namespace pulls a **private** ghcr image. It must be a classic PAT with
 a user-owned package and pulls 403 with a token that is otherwise valid.
 Making the package public removes the need entirely.
 
-Both secrets must be passed **explicitly** by cross-owner (`ITGuys-RO/*`)
+All three secrets must be passed **explicitly** by cross-owner (`ITGuys-RO/*`)
 callers; `secrets: inherit` does not reliably carry org-level
 selected-visibility secrets across the owner boundary.
 
+#### Several Secrets — `SECRETS_MANIFEST`
+
+For a namespace whose Secrets do not collapse into one. Each Secret is a
+`[name]` header followed by its own `KEY=VALUE` lines; blank lines and `#`
+comments are ignored, only the key **names** are logged, and each Secret is
+upserted through the same idempotent dry-run-into-apply as `SECRET_LITERALS`.
+
+```yaml
+  with:
+    namespace: trading
+  secrets:
+    SECRETS_MANIFEST: |
+      [gw2-api-key]
+      ARENA_NET_KEY=${{ secrets.ARENA_NET_KEY }}
+
+      [gw2-postgres-creds]
+      POSTGRES_USER=gw2
+      POSTGRES_DB=gw2
+      POSTGRES_PASSWORD=${{ secrets.PG_PASSWORD }}
+      PGUSER=gw2
+      PGDATABASE=gw2
+      PGPASSWORD=${{ secrets.PG_PASSWORD }}
+```
+
+Note the second Secret above mixes a password with the non-secret user and
+database names that travel with it. That is the point rather than an
+accident: splitting it so the non-secret half could arrive as an input would
+hand the workload two Secrets to mount where the manifest expects one.
+
+There is **no input** naming these Secrets — the presence of the secret is the
+switch. An input listing them would be a second place for the same list to be
+written and a chance for the two to disagree, and it would reveal nothing that
+is not already logged.
+
+`SECRETS_MANIFEST` and `secret-name` are independent; use either, both, or
+neither. If a caller composes it entirely from GitHub secrets that are all
+unset, the step fails with "no `[secret-name]` section could be parsed" rather
+than silently creating nothing.
+
 #### What not to migrate
 
-A `workflow_call` hands the caller a **job**, not a step, so any repo needing
+A `workflow_call` hands the caller a **job**, not a step, so a repo needing
 its own steps *interleaved* with these cannot use it without smuggling them in
-as shell strings. Three known cases:
+as shell strings. That constraint is what the `prune-command`,
+`post-apply-command`, `verify-command` and `show-command` inputs exist for —
+and where a caller's extra work does not fit one of those slots, the answer is
+a **second job in the caller's own repo**, not a wider input surface here.
 
-- **A deploy with app-specific observability steps** (Grafana dashboard and
-  alert provisioning, deliberately soft-failing) would drag three
-  single-caller secrets into this workflow's surface. Split it instead: this
-  workflow for image+secrets+apply, a second job `needs: deploy` in the
-  caller's own repo for the rest.
-- **A repo needing two distinct Secrets**, one of which mixes secret and
-  non-secret literals, cannot express that through one `SECRET_LITERALS` blob.
-- **A Helm-based pipeline** (`helm upgrade --install --atomic`, SA
-  impersonation, `--dry-run=server` diffing in PR checks) is a different
-  problem. If it is ever wanted it is a separate `deploy-helm.yml`.
+- **A deploy with app-specific observability steps** — Grafana dashboard and
+  alert provisioning, deliberately soft-failing — would drag three
+  single-caller secrets into this workflow's surface. Split it: this workflow
+  for image + secrets + apply, then a `needs: deploy` job in the caller for
+  the rest, keeping those secrets local to the repo that owns them.
+  `ITGuys-RO/invest` is the worked example.
+- **A Helm-based pipeline** is a different problem — the unit of change is a
+  release, not a file. That is [`deploy-helm.yml`](#deploy-helmyml--install-or-upgrade-one-helm-release) below.
+- **A caller authenticating with a `KUBECONFIG` secret** cannot use this
+  workflow at all: auth is the runner pod's ServiceAccount and there is no
+  kubeconfig input. Only `ITGuys-RO/ollama-k3s` was ever in that shape, and
+  its namespace is torn down, so it stays un-migrated rather than justifying
+  an unused credential path. Reviving it means adding an optional
+  `KUBECONFIG` secret here — a backwards-compatible minor bump.
+
+Two cases that *used* to be listed here are now handled: two distinct Secrets
+(see `SECRETS_MANIFEST` above), and Helm (see below).
+
+### `deploy-helm.yml` — install or upgrade one Helm release
+
+The Helm sibling of `deploy-k8s.yml`, and separate from it for a reason worth
+stating: a Helm pipeline is not a `kubectl apply` pipeline with extra flags.
+The unit of change is a release rather than a file, the ordering constraints
+are Helm's, and the useful pre-flight — `helm lint` plus `helm template` piped
+into a dry-run apply — has no counterpart in a manifest apply. Folding it into
+`deploy-k8s.yml` would have doubled that workflow's inputs for every caller
+that never installs a chart.
+
+Auth, runner requirements and the `contents: read` permission ceiling are
+identical to `deploy-k8s.yml`. It has **no secrets**: the caller it was
+derived from pre-creates its Secrets in shapes no `KEY=VALUE` blob can express
+— a `patch --merge` into a *different* namespace, a `--from-file` SSH key —
+and references them from values by name.
+
+The step order is fixed:
+
+```
+repo add/update → lint → template check → upgrade
+  → post-upgrade → rollout → verify → show
+```
+
+**Validation and deployment are the same workflow, called twice.** A PR check
+calls it with `upgrade: false` and writes nothing; a deploy calls it with the
+defaults. That is what stops the gate and the deploy drifting apart — a
+validation step that lints a different chart version than the one being
+installed is worse than no gate, because it is green.
+
+| Input | Default | Note |
+| --- | --- | --- |
+| `namespace`, `release`, `chart` | *required* | `chart` is `<repo>/<chart>`, an `oci://` reference, or a directory in the checkout |
+| `chart-version` | `""` | empty resolves to whatever the repository serves today — pin it. Warns unless `chart` is a directory, which the commit already pins |
+| `repo-url` | `""` | added and updated before resolving `chart`; `repo-name` defaults to `chart`'s first path segment |
+| `values-files` | `""` | newline-separated `-f` paths relative to `working-dir`, later files winning, checked for existence here so a `working-dir` mistake names itself |
+| `set-literals` | `""` | `--set-string` lines, **non-secret only** — they land in the run log and in `helm get values` |
+| `setup-helm` | `true` | on by default, unlike `setup-kubectl`: the pre-baked runner image ships kubectl but not helm |
+| `lint` | `false` | a remote chart is pulled and untarred first, because helm v4 dropped `helm lint --version` on a remote reference |
+| `template-check` | `false` | render + `kubectl apply --dry-run=client`. **Not offline** — see below |
+| `upgrade` | `true` | set false for a pure validation gate |
+| `atomic` | `false` | rolls back on failure. Implies `--wait`, so `helm-timeout` becomes the readiness budget |
+| `rollout-targets` | `""` | separate from `atomic` because `--atomic` already waited |
+| `create-namespace` | `false` | off because a per-scale-set SA usually cannot create namespaces, and on would trade a clear "not found" for an RBAC denial |
+
+`template-check` is **not** an offline parse. `kubectl apply
+--dry-run=client` still GETs the live object to compute the merge patch, so it
+needs a reachable API server and a namespace the runner's ServiceAccount can
+read. It is a schema-and-RBAC gate.
+
+`--atomic` is also what makes the `always()` show step matter more here than
+in `deploy-k8s.yml`: by the time anyone reads the log, Helm has already rolled
+the release back, so the failed objects are gone and the dumped events are the
+only surviving record of why it never went ready. The step prints
+`helm history` alongside them for the same reason.
+
+Deploy caller — a pinned chart, values from the repo, atomic:
+
+```yaml
+helm:
+  permissions:
+    contents: read
+  uses: dustfeather/shared-workflows/.github/workflows/deploy-helm.yml@v4
+  with:
+    namespace: nextcloud
+    release: nextcloud
+    chart: nextcloud/nextcloud
+    chart-version: "9.1.0"
+    repo-url: https://nextcloud.github.io/helm/
+    values-files: helm/nextcloud-values.yaml
+    runner: arc-itguys-ro-nextcloud
+    setup-kubectl: true
+    atomic: true
+    helm-timeout: 5m
+    rollout-targets: deploy/nextcloud
+    rollout-timeout: 5m
+```
+
+The same workflow as a PR gate — one word different, and nothing is written:
+
+```yaml
+validate-chart:
+  uses: dustfeather/shared-workflows/.github/workflows/deploy-helm.yml@v4
+  with:
+    namespace: nextcloud
+    release: nextcloud
+    chart: nextcloud/nextcloud
+    chart-version: "9.1.0"
+    repo-url: https://nextcloud.github.io/helm/
+    values-files: helm/nextcloud-values.yaml
+    runner: arc-itguys-ro-nextcloud
+    setup-kubectl: true
+    lint: true
+    template-check: true
+    upgrade: false
+```
 
 ## Usage
 
