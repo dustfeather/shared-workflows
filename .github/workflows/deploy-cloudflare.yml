@@ -11,7 +11,8 @@ name: Deploy to Cloudflare (reusable)
 # Ordering is the part that is NOT configurable, because getting it wrong is
 # silent rather than loud:
 #
-#   install -> build -> migrate -> reference data -> budget gate -> deploy -> verify
+#   install -> build -> migrate -> reference data -> budget gate -> deploy
+#     -> secrets check -> startup gate -> cron check -> verify
 #
 # Migrations and reference data run BEFORE the deploy on purpose. A Worker whose
 # schema or KV is not there yet does not fail to start — it answers requests
@@ -109,6 +110,26 @@ on:
         description: How many times to poll `verify-url` before giving up (5 s apart)
         type: number
         default: 12
+      expect-crons:
+        description: |
+          Comma-separated cron expressions this deploy must leave registered on
+          the Worker, e.g. `0 * * * *` or `0 * * * *,30 3 * * *`. Empty (the
+          default) skips the check.
+
+          Set it for a Worker whose only entrypoint is `scheduled()`.
+          `verify-url` cannot cover that case — there is no HTTP surface to
+          curl — and nothing else in this workflow looks at schedules, so an
+          absent or misplaced `triggers.crons` block deploys green and the
+          failure only surfaces later as "the job never ran".
+        type: string
+        default: ""
+      worker-name:
+        description: |
+          Script name to query for `expect-crons`. Empty (the default) resolves
+          it from the deploy output, then from `name` in the wrangler config.
+          Set it only when that resolution fails.
+        type: string
+        default: ""
       runner:
         description: |
           Self-hosted ARC scale-set label for the runner pool. Defaults to
@@ -358,6 +379,102 @@ jobs:
             exit 1
           fi
 
+      - if: inputs.expect-crons != ''
+        name: Confirm the Cron Triggers registered
+        working-directory: ${{ inputs.working-dir }}
+        env:
+          EXPECT_CRONS: ${{ inputs.expect-crons }}
+          WORKER_NAME: ${{ inputs.worker-name }}
+        run: |
+          set -euo pipefail
+          # A green deploy is not evidence the schedules exist. Wrangler treats
+          # an absent `triggers` block as "leave whatever is already there
+          # alone", so a block under the wrong environment key — or in a config
+          # file wrangler never read — uploads cleanly with zero crons and zero
+          # warnings. And `wrangler versions upload` does not apply triggers at
+          # all; that needs a separate `wrangler triggers deploy`. Either way
+          # the failure surfaces an hour later as "the job never ran", with no
+          # failed run to point at.
+          #
+          # So ask the account what is registered instead of reading deploy.log:
+          # the log is wrangler-version-dependent formatting, and on the
+          # `versions upload` path it legitimately never mentions schedules.
+          # The endpoint needs only Workers Scripts Read, which the token must
+          # already exceed to have deployed at all.
+
+          norm() { sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/[[:space:]][[:space:]]*/ /g'; }
+
+          name="$WORKER_NAME"
+          if [ -z "$name" ] && [ -f deploy.log ]; then
+            # Both `wrangler deploy` and `wrangler versions upload` print this.
+            name="$(sed 's/\x1b\[[0-9;]*m//g' deploy.log \
+              | grep -oE '^Uploaded [A-Za-z0-9_.-]+' | tail -1 | cut -d' ' -f2 || true)"
+          fi
+          if [ -z "$name" ]; then
+            # Fallback: the `name` key of whichever config wrangler would read.
+            for f in wrangler.jsonc wrangler.json wrangler.toml; do
+              if [ -f "$f" ]; then
+                name="$(grep -oE '^[[:space:]]*"?name"?[[:space:]]*[:=][[:space:]]*"[^"]+"' "$f" \
+                  | head -1 | grep -oE '"[^"]+"$' | tr -d '"' || true)"
+                if [ -n "$name" ]; then break; fi
+              fi
+            done
+          fi
+          if [ -z "$name" ]; then
+            echo "::error::expect-crons is set but the Worker script name could not be resolved from deploy.log or the wrangler config in ${PWD}. Pass worker-name explicitly."
+            exit 1
+          fi
+
+          body="${RUNNER_TEMP}/worker-schedules.json"
+          code="$(curl -sS -o "$body" -w '%{http_code}' --max-time 30 \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${name}/schedules" \
+            || echo 000)"
+          if [ "$code" != "200" ]; then
+            echo "::error::Could not read the Cron Triggers of Worker '${name}' (HTTP ${code}). The deploy already happened; this gate did not run."
+            head -c 500 "$body" 2>/dev/null || true
+            echo
+            exit 1
+          fi
+
+          # An account with no schedules returns `result.schedules: []`, which is
+          # a valid 200 — the empty case has to fall through to the comparison
+          # below rather than being treated as "nothing to check".
+          live="$(node -e '
+            const fs = require("fs");
+            const j = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            if (!j.success) { console.error(JSON.stringify(j.errors)); process.exit(1); }
+            for (const s of (j.result && j.result.schedules) || []) console.log(s.cron);
+          ' "$body" | norm)"
+
+          if [ -z "$live" ]; then
+            echo "Registered on ${name}: (none)"
+          else
+            echo "Registered on ${name}:"
+            printf '%s\n' "$live" | sed 's/^/  /'
+          fi
+
+          missing=""
+          # Cron expressions are mostly `*`, so disable globbing before the
+          # unquoted split, and split on comma only.
+          set -f
+          IFS=','
+          for want in $EXPECT_CRONS; do
+            w="$(printf '%s' "$want" | norm)"
+            [ -n "$w" ] || continue
+            if ! printf '%s\n' "$live" | grep -qxF "$w"; then
+              missing="${missing}${missing:+, }${w}"
+            fi
+          done
+          unset IFS
+          set +f
+
+          if [ -n "$missing" ]; then
+            echo "::error::Worker '${name}' deployed, but these Cron Triggers are not registered: ${missing}. Check that triggers.crons is in the config wrangler actually read and not scoped to an unused environment; a 'wrangler versions upload' deploy-command needs a follow-up 'wrangler triggers deploy'."
+            exit 1
+          fi
+          echo "All expected Cron Triggers are registered on ${name}."
+
       - if: inputs.verify-url != ''
         name: Verify the deployed Worker answers
         env:
@@ -385,10 +502,12 @@ jobs:
         if: always()
         env:
           WORKING_DIR: ${{ inputs.working-dir }}
+          EXPECT_CRONS: ${{ inputs.expect-crons }}
         run: |
           set -eu
           {
             echo "### Cloudflare deploy — \`${WORKING_DIR}\`"
             [ -n "${bundle_gzip_kib:-}" ] && echo "- bundle: ${bundle_gzip_kib} KiB gzip"
+            [ -n "${EXPECT_CRONS:-}" ] && echo "- cron triggers asserted: \`${EXPECT_CRONS}\`"
             echo "- deploy command: \`${{ inputs.deploy-command }}\`"
           } >> "$GITHUB_STEP_SUMMARY"

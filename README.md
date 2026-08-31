@@ -144,7 +144,8 @@ orders them with `needs:`.
 The step order is fixed and is the part that matters:
 
 ```
-install → build → pre-deploy → budget gate → deploy → startup gate → verify
+install → build → pre-deploy → budget gate → deploy
+  → secrets check → startup gate → cron check → verify
 ```
 
 `pre-deploy-command` (migrations, publishing reference data) runs *before* the
@@ -172,6 +173,48 @@ apart by default). Skipping it is allowed and is a choice to deploy without
 checking.
 
 Secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are both required.
+
+#### Cron-only Workers — `expect-crons`
+
+A Worker whose only entrypoint is `scheduled()` has no HTTP surface, so
+`verify-url` has nothing to curl and every other gate in the workflow runs
+before or beside the schedules rather than on them. Wrangler makes that gap
+easy to fall into:
+
+- an absent `triggers` block is a **no-op, not an error** — the crons already
+  deployed are left in place, so a block under the wrong environment key, or in
+  a config file wrangler never read, uploads clean with zero schedules and zero
+  warnings;
+- `wrangler versions upload` **does not apply triggers at all**. A caller that
+  overrides `deploy-command` with it gets its secrets and no crons, and needs a
+  follow-up `wrangler triggers deploy`.
+
+Either way the deploy is green and the failure only shows up an hour or a day
+later as "the job never ran", with no failed run to point at.
+
+`expect-crons` closes that. Set it to the comma-separated expressions the deploy
+must leave registered, and after the upload the job reads
+`GET /accounts/{id}/workers/scripts/{name}/schedules` and fails naming any that
+are missing. It asserts the end state on the account rather than parsing
+wrangler's output, so it also covers the `versions upload` path — where the log
+would legitimately never mention a schedule. No new credential: the endpoint
+takes `Workers Scripts Read`, which `CLOUDFLARE_API_TOKEN` already exceeds by
+being able to deploy.
+
+Empty (the default) skips the check, so it is non-breaking for existing callers.
+The script name is resolved from the deploy output, then from `name` in the
+wrangler config; `worker-name` overrides it if both fail.
+
+```yaml
+deploy-cron-worker:
+  uses: dustfeather/shared-workflows/.github/workflows/deploy-cloudflare.yml@v4
+  with:
+    working-dir: workers/gw2roi
+    expect-crons: 0 * * * *
+  secrets:
+    CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+```
 
 #### Runtime secrets — `WORKER_SECRETS`
 
