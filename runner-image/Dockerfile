@@ -44,6 +44,13 @@
 #     model. claude.yml + claude-code-review.yml wire it as a PreToolUse hook
 #     (`rtk hook claude`) via the action's `settings` input; baked here so any
 #     workflow on this runner can use it.
+#   - pr-review-toolkit@claude-plugins-official (Claude Code plugin), baked
+#     into /home/runner/.claude/plugins so claude-code-review.yml can fan the
+#     standard review track out to its specialist subagents
+#     (pr-review-toolkit:code-reviewer / silent-failure-hunter /
+#     pr-test-analyzer). Baked rather than installed per job: declaring the
+#     plugin in settings.json alone does NOT install it, and a per-job install
+#     would re-clone the marketplace repo on every review.
 #   - Pre-warmed Bun install cache for anthropics/claude-code-action@v1's
 #     own runtime deps (~140 packages incl. @anthropic-ai/claude-agent-sdk,
 #     @modelcontextprotocol/sdk, octokit), so the per-job
@@ -289,3 +296,29 @@ RUN set -eux; \
     cd /tmp/cca; \
     bun install --production; \
     rm -rf /tmp/cca
+
+# Bake the pr-review-toolkit plugin (Anthropic's official marketplace) into
+# the runner's ~/.claude so claude-code-review.yml's standard track can
+# dispatch its specialist subagents. Runs as `runner` deliberately: plugin
+# state is per-$HOME, and the job runs as `runner`.
+#
+# Three non-obvious constraints, each verified rather than assumed:
+#   - The marketplace source MUST be the full https:// URL. The `owner/repo`
+#     shorthand resolves to `git@github.com:` and the clone dies on any host
+#     without an SSH key — which is every CI runner.
+#   - `install` needs `-y`: without a TTY it otherwise refuses the
+#     marketplace-declared-command confirmation.
+#   - Declaring the plugin in settings.json (`enabledPlugins` /
+#     `extraKnownMarketplaces`) does NOT install it; Claude Code reads those
+#     keys but performs no fetch. The install has to actually run.
+#
+# The install writes both the plugin cache and the `enabledPlugins` /
+# `extraKnownMarketplaces` keys into /home/runner/.claude/settings.json.
+# claude-code-action shallow-merges its own `settings:` input over that file
+# ({...existing, ...input}), and that input only carries `hooks`, so the
+# plugin keys survive. If a caller ever passes those keys itself, its value
+# wins — which is the intended precedence.
+RUN set -eux; \
+    claude plugin marketplace add https://github.com/anthropics/claude-plugins-official; \
+    claude plugin install pr-review-toolkit@claude-plugins-official -y; \
+    claude plugin list | grep -q 'pr-review-toolkit@claude-plugins-official'

@@ -3,7 +3,14 @@
 `Dockerfile` here builds a derivative of `ghcr.io/actions/actions-runner`
 with the tooling our reusable workflows need pre-installed: `gh`, `jq`,
 Node, Bun (pinned to the version `anthropics/claude-code-action@v1`
-expects), and `@anthropic-ai/claude-code`.
+expects), `@anthropic-ai/claude-code`, and the
+`pr-review-toolkit@claude-plugins-official` Claude Code plugin that
+`claude-code-review.yml`'s standard track fans out to.
+
+The plugin is baked rather than installed per job because declaring it in
+`settings.json` does not install it — Claude Code reads `enabledPlugins`
+and `extraKnownMarketplaces` but performs no fetch, so a settings-only
+review silently runs without the subagents.
 
 CI builds + pushes it to
 `ghcr.io/dustfeather/actions-runner-claude` on every push to `main` that
