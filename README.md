@@ -1,5 +1,7 @@
 # shared-workflows
 
+[![Tag release](https://github.com/dustfeather/shared-workflows/actions/workflows/tag-release.yml/badge.svg)](https://github.com/dustfeather/shared-workflows/actions/workflows/tag-release.yml)
+
 Reusable GitHub Actions workflows for cross-cutting CI across every repo
 under this account. One source of truth for Claude Code review, browser-
 extension publishing, and anything else that recurs.
