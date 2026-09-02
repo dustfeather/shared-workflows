@@ -162,11 +162,18 @@ jobs:
               - When in doubt, request changes. Always end on exactly one of approve/request-changes; never on a plain comment alone.
 
             Be terse. No emoji. No filler.
-          # Opus 4.7 + high effort + adaptive thinking: code review is a
+          # `opus` + high effort + adaptive thinking: code review is a
           # judgment-heavy, low-volume, short-output task — spend on the better
           # reasoner. `high` (not `max`) keeps it from deprioritizing the
-          # decision rules above; adaptive is required on 4.7 and gives
-          # interleaved thinking between the gh tool calls.
+          # decision rules above; adaptive gives interleaved thinking between
+          # the gh tool calls.
+          #
+          # `opus` is the CLI alias for the LATEST Opus, so a new Opus release
+          # is picked up with no edit here. Deliberately NOT a pinned snapshot
+          # (drifts) and NOT `opusplan` (that alias is Opus only in plan mode,
+          # Sonnet otherwise). No `--fallback-model` is set, and there is no
+          # implicit default fallback, so this can never silently land on
+          # Sonnet or Haiku.
           #
           # `Task` is what makes the pr-review-toolkit subagents reachable —
           # without it they load but cannot be invoked, and the standard track
@@ -178,7 +185,7 @@ jobs:
           # each fans out at opus + effort high. That is why the standard track
           # dispatches three, not all of them.
           claude_args: >-
-            --model claude-opus-4-8
+            --model opus
             --effort high
             --thinking adaptive
             --mcp-config '{"mcpServers":{"code-review-graph":{"command":"code-review-graph","args":["serve"]}}}'
