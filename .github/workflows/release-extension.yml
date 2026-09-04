@@ -108,6 +108,7 @@ jobs:
       matrix:
         target: ${{ fromJSON(inputs.targets) }}
     env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
       EXT_VERSION: ${{ needs.prepare.outputs.version }}
       TAG: ${{ needs.prepare.outputs.tag }}
       BASE: ${{ needs.prepare.outputs.base }}
@@ -116,6 +117,20 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.tag }}
           fetch-depth: 0
+
+      - name: Authenticate to npm registry
+        run: |
+          set -u
+          if [ -z "${NPM_TOKEN:-}" ]; then
+            echo "NPM_TOKEN unset — registry calls stay anonymous."
+            exit 0
+          fi
+          # The ${NPM_TOKEN} below is written LITERALLY: npm, pnpm and yarn all
+          # expand env references when they READ .npmrc, so the token value
+          # never lands on disk, in a cache layer or in an artifact.
+          printf '//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n' >> "$HOME/.npmrc"
+          echo "Wrote registry auth to ~/.npmrc (token read from env at use time)."
+
       - uses: pnpm/action-setup@v6
         env:
           # The action's self-installer shells out to `npm install` against

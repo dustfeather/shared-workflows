@@ -88,6 +88,17 @@ on:
           scale-set (e.g. `arc-df-uninsta`, `arc-itguys-ro-invest`).
         type: string
         default: "arc-df-shared-workflows"
+    secrets:
+      NPM_TOKEN:
+        description: |
+          npm granular access token, read-only with no package/scope/org
+          grants. Written into ~/.npmrc as an env-expanded reference, so
+          install and audit authenticate to registry.npmjs.org instead of
+          running anonymously. Optional — an unset or misnamed secret
+          interpolates to the empty string, which is indistinguishable from
+          "not configured", so the auth step skips and behaviour is unchanged
+          rather than half-authenticated.
+        required: false
 
 permissions:
   contents: read
@@ -97,11 +108,26 @@ jobs:
     runs-on: ${{ inputs.runner }}
     permissions:
       contents: read
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     defaults:
       run:
         working-directory: ${{ inputs.working-dir }}
     steps:
       - uses: actions/checkout@v7
+
+      - name: Authenticate to npm registry
+        run: |
+          set -u
+          if [ -z "${NPM_TOKEN:-}" ]; then
+            echo "NPM_TOKEN unset — registry calls stay anonymous."
+            exit 0
+          fi
+          # The ${NPM_TOKEN} below is written LITERALLY: npm, pnpm and yarn all
+          # expand env references when they READ .npmrc, so the token value
+          # never lands on disk, in a cache layer or in an artifact.
+          printf '//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n' >> "$HOME/.npmrc"
+          echo "Wrote registry auth to ~/.npmrc (token read from env at use time)."
 
       - name: Detect package manager
         id: pm
