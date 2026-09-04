@@ -120,6 +120,19 @@ jobs:
 
       - if: steps.pm.outputs.pm == 'pnpm'
         uses: pnpm/action-setup@v6
+        env:
+          # The action's self-installer shells out to `npm install` against
+          # registry.npmjs.org, so npm_config_* applies. `audit` is the
+          # important one: npm audits by default after install, which POSTs to
+          # /-/npm/v1/security/audits — the endpoint that accepts a request and
+          # never answers during npm advisory-API incidents, turning a ~5s step
+          # into a multi-minute hang (see issue #24). The retry budget covers
+          # the package fetch itself.
+          npm_config_audit: "false"
+          npm_config_fund: "false"
+          npm_config_fetch_retries: "5"
+          npm_config_fetch_timeout: "120000"
+          npm_config_fetch_retry_maxtimeout: "120000"
         with:
           version: ${{ inputs.pnpm-version }}
 
