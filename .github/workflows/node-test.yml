@@ -154,6 +154,15 @@ jobs:
         env:
           PM: ${{ steps.pm.outputs.pm }}
           LEVEL: ${{ inputs.audit-level }}
+          # npm's advisory endpoint (/-/npm/v1/security/audits) intermittently
+          # accepts a request and never answers. The default budget (2 retries,
+          # 10s then 60s) gives up after ~4m and fails the step, which skips
+          # typecheck/test/build and any deploy job gated on this workflow.
+          # npm, pnpm and yarn all honour npm_config_*, so one block covers
+          # every branch of the case below.
+          npm_config_fetch_retries: "5"
+          npm_config_fetch_timeout: "120000"
+          npm_config_fetch_retry_maxtimeout: "120000"
         run: |
           set -u
           case "$PM" in
