@@ -176,6 +176,46 @@ checking.
 
 Secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are both required.
 
+#### Verifying a hostname behind Cloudflare Access
+
+A hostname fronted by an Access application answers an unauthenticated probe
+with a `302` to `<team>.cloudflareaccess.com`, never a 2xx. `verify-url` then
+burns every attempt and fails a deploy that actually succeeded, taking the
+downstream jobs with it.
+
+Pass an Access **service token** and the verify step sends it as the
+`CF-Access-Client-Id` / `CF-Access-Client-Secret` headers:
+
+```yaml
+deploy-api:
+  uses: dustfeather/shared-workflows/.github/workflows/deploy-cloudflare.yml@v4
+  with:
+    working-dir: apps/api
+    verify-url: https://gated.example.com/api/v1/health
+    verify-requires-access: true
+  secrets:
+    CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+    CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+```
+
+- The token must be attached to a **`non_identity`** policy on that
+  application. Access ignores a service token that no policy admits and keeps
+  redirecting.
+- Both halves must be non-empty or **neither** is sent. Omitting them keeps the
+  prior behaviour exactly: an unauthenticated probe.
+- `verify-requires-access: true` turns the silent fallback into a failure. An
+  unset or misnamed secret interpolates to the empty string, so without this
+  flag a typo in the caller's `secrets:` block looks identical to "this caller
+  has no Access in front of it" — and the run fails much later, claiming the
+  Worker is not serving.
+- When the probe still lands on `cloudflareaccess.com`, the error says whether a
+  token was sent (Access **rejected** it) or not (the URL is **gated** and no
+  token was supplied) instead of blaming the Worker.
+- Headers travel through the step's positional parameters; the values are never
+  interpolated into a command string and never echoed.
+
 #### Cron-only Workers — `expect-crons`
 
 A Worker whose only entrypoint is `scheduled()` has no HTTP surface, so

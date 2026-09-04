@@ -110,6 +110,24 @@ on:
         description: How many times to poll `verify-url` before giving up (5 s apart)
         type: number
         default: 12
+      verify-requires-access:
+        description: |
+          Fail the verify step immediately unless both `CF_ACCESS_CLIENT_ID` and
+          `CF_ACCESS_CLIENT_SECRET` are non-empty.
+
+          An unset secret interpolates to the empty string, so "no credentials
+          were configured" and "the caller typo'd the secret name" look
+          identical to the step. The default (`false`) treats both as "probe
+          unauthenticated", which is right for every caller that has no Access
+          application in front of `verify-url`. Set it to `true` when the
+          hostname IS behind Access, so a misnamed secret fails saying so
+          instead of falling back to an unauthenticated probe and reporting the
+          Worker as broken.
+
+          Only consulted when `verify-url` is set; there is nothing to verify
+          otherwise.
+        type: boolean
+        default: false
       expect-crons:
         description: |
           Comma-separated cron expressions this deploy must leave registered on
@@ -160,6 +178,27 @@ on:
 
           Only the secret NAMES are ever printed. GitHub masks the values in
           logs, but the workflow does not echo them regardless.
+        required: false
+      CF_ACCESS_CLIENT_ID:
+        description: |
+          Cloudflare Access service-token client ID, sent by the verify step as
+          the `CF-Access-Client-Id` header. Set it only when `verify-url` sits
+          behind an Access application — an unauthenticated probe of one gets a
+          302 to `<team>.cloudflareaccess.com`, never a 2xx, so a healthy deploy
+          fails the gate.
+
+          The token must be attached to a `non_identity` policy on that
+          application, or Access ignores it and still redirects.
+
+          Empty (the default) probes unauthenticated, which is the prior
+          behaviour. Pair it with `verify-requires-access: true` so a typo does
+          not silently degrade to that.
+        required: false
+      CF_ACCESS_CLIENT_SECRET:
+        description: |
+          Client secret half of the service token above, sent as the
+          `CF-Access-Client-Secret` header. Both halves must be present or
+          neither is sent.
         required: false
 
 permissions:
@@ -493,13 +532,42 @@ jobs:
         env:
           VERIFY_URL: ${{ inputs.verify-url }}
           ATTEMPTS: ${{ inputs.verify-attempts }}
+          REQUIRE_ACCESS: ${{ inputs.verify-requires-access }}
+          ACCESS_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          ACCESS_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           set -eu
+          # The Access headers are carried in the positional parameters and
+          # spliced in as "$@", so the token never becomes part of a command
+          # string that could be echoed, logged or word-split.
+          if [ -n "${ACCESS_ID:-}" ] && [ -n "${ACCESS_SECRET:-}" ]; then
+            set -- --header "CF-Access-Client-Id: ${ACCESS_ID}" \
+                   --header "CF-Access-Client-Secret: ${ACCESS_SECRET}"
+            authed=yes
+            echo "Probing with a Cloudflare Access service token."
+          elif [ "$REQUIRE_ACCESS" = "true" ]; then
+            echo "::error::verify-requires-access is set, but CF_ACCESS_CLIENT_ID and/or CF_ACCESS_CLIENT_SECRET arrived empty. An unset or misnamed secret interpolates to the empty string, so this is indistinguishable from 'no credentials configured' — check the names in the caller's secrets: block, and that the values are non-empty."
+            exit 1
+          else
+            set --
+            authed=no
+          fi
+
           # A fresh route can take a few seconds to propagate, so poll rather
           # than assuming the first request is representative.
           i=1
+          redirect=""
           while [ "$i" -le "$ATTEMPTS" ]; do
-            code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$VERIFY_URL" || echo 000)"
+            # redirect_url is captured too: a hostname behind Access answers
+            # 302 to <team>.cloudflareaccess.com forever, which is a different
+            # failure from a Worker that is not serving.
+            out="$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' --max-time 20 "$@" "$VERIFY_URL" | head -n 1 || true)"
+            [ -n "$out" ] || out="000"
+            code="${out%% *}"
+            case "$out" in
+              *" "*) redirect="${out#* }" ;;
+              *) redirect="" ;;
+            esac
             if [ "$code" -ge 200 ] && [ "$code" -lt 300 ]; then
               echo "$VERIFY_URL -> $code after ${i} attempt(s)"
               exit 0
@@ -508,7 +576,19 @@ jobs:
             i=$((i + 1))
             sleep 5
           done
-          echo "::error::${VERIFY_URL} never answered 2xx after ${ATTEMPTS} attempts — the deploy reported success but the Worker is not serving"
+
+          case "$redirect" in
+            *cloudflareaccess.com*)
+              if [ "$authed" = yes ]; then
+                echo "::error::${VERIFY_URL} kept redirecting to Cloudflare Access (${redirect%%\?*}) even though a service token was sent, so Access rejected the token — the Worker itself may be fine. Check that CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET are both halves of the same, non-revoked service token, and that it is attached to a non_identity policy on this application."
+              else
+                echo "::error::${VERIFY_URL} is behind a Cloudflare Access application (it redirects to ${redirect%%\?*}), so an unauthenticated probe can never answer 2xx — the Worker itself may be fine. Pass CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET (an Access service token on a non_identity policy) to this workflow, with verify-requires-access: true."
+              fi
+              ;;
+            *)
+              echo "::error::${VERIFY_URL} never answered 2xx after ${ATTEMPTS} attempts — the deploy reported success but the Worker is not serving"
+              ;;
+          esac
           exit 1
 
       - name: Summary
