@@ -29,6 +29,10 @@ where the build itself is the most useful PR-time check; that way the
 PR-time `tests.yml` shim subsumes what a separate `build.yml` would
 have done.
 
+Optionally pass `secrets: NPM_TOKEN` to authenticate to
+registry.npmjs.org for both the install and the audit — see
+[Registry authentication](#registry-authentication-npm_token).
+
 ### `python-test.yml` — Python ruff + pytest
 
 Reusable workflow for ruff lint, ruff format check, and pytest. Defaults
@@ -672,6 +676,44 @@ jobs:
 ```
 
 ## Secrets
+
+### Registry authentication — `NPM_TOKEN`
+
+`node-test.yml`, `deploy-cloudflare.yml` and `release-extension.yml` accept an
+optional `NPM_TOKEN` and write it into `~/.npmrc` before any step touches
+registry.npmjs.org, so installs and audits run authenticated rather than
+anonymously.
+
+Mint it on npmjs.com as a **granular access token**, **read-only**, with **no
+package, scope or organization grants** — nothing here publishes, and nothing
+here installs a private package, so any grant beyond that is blast radius for
+no gain. Classic tokens were removed in November 2025, so granular is the only
+kind available; they carry a mandatory expiry and will need rotating.
+
+The token is written as a **literal `${NPM_TOKEN}` reference, not its value**:
+
+```
+//registry.npmjs.org/:_authToken=${NPM_TOKEN}
+```
+
+npm, pnpm and yarn all expand env references when they *read* `.npmrc`, so the
+secret is resolved at use time and never lands on disk, in a restored cache
+layer or in an uploaded artifact.
+
+The step is **guarded on a non-empty value and the secret is `required: false`**.
+An unset or misnamed secret interpolates to the empty string, which is
+indistinguishable from "not configured" — and writing an empty `_authToken`
+turns every registry call into `ENEEDAUTH`, which is strictly worse than
+anonymous. So the step skips instead, and a caller that has not been wired up
+keeps working unchanged.
+
+Note this is a *hardening* measure, not a fix for a broken audit: as of
+2026-09-04 both `/-/npm/v1/security/audits/quick` and
+`/-/npm/v1/security/advisories/bulk` answer HTTP 200 unauthenticated. If the
+audit step fails, check for the hang described in issue #24 before suspecting
+credentials.
+
+### Claude — `CLAUDE_CODE_OAUTH_TOKEN`
 
 Each calling repo must have `CLAUDE_CODE_OAUTH_TOKEN` set — either as a
 repository secret or inherited from an organization secret. The shim then
