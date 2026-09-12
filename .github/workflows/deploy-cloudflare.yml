@@ -26,6 +26,11 @@ name: Deploy to Cloudflare (reusable)
 # needs the Worker to already exist, which is false on a first-ever deploy.
 # `--secrets-file` applies additively — a secret the caller stops passing is
 # not deleted from the Worker.
+#
+# `dry-run: true` stops the chain after the budget gate: build, bundle,
+# measure, never upload. It exists so a pull request can meet the same bundle
+# the merge will ship, instead of the deploy being the first thing that
+# compiles it.
 
 on:
   workflow_call:
@@ -78,6 +83,33 @@ on:
         description: Shell command that performs the deploy, run in `working-dir`
         type: string
         default: "npx wrangler deploy"
+      dry-run:
+        description: |
+          Build and measure the Worker, then stop — never upload. `false` (the
+          default) is an ordinary deploy.
+
+          It exists so a pull request can meet the bundle the merge will ship.
+          `node-test.yml` installs, audits, typechecks and tests; nothing there
+          compiles a Worker, so a `wrangler`, `next` or framework bump goes
+          green on a PR and the production deploy is the first thing to bundle
+          it. With this on, a caller adds a PR job that runs install -> build
+          -> `wrangler deploy --dry-run` and applies `max-gzip-kib`, so a size
+          regression fails the PR rather than the deploy.
+
+          What it CANNOT check is startup time. That number is measured by the
+          upload and `--dry-run` never prints it, so `max-startup-ms` stays a
+          post-deploy gate and `10021 Script startup exceeded CPU time limit`
+          is still reachable from a green PR. Half the budget checked early is
+          the half that catches a dependency doubling in size.
+
+          Everything that talks to a live Worker is skipped: the deploy itself,
+          the runtime secrets, the secrets-landed check, the startup gate, the
+          cron check and the verify probe. `CLOUDFLARE_API_TOKEN` and
+          `CLOUDFLARE_ACCOUNT_ID` are not needed and should not be passed — a
+          dry run authenticates to nothing, and a pull-request job is the last
+          place to hand out a deploy credential.
+        type: boolean
+        default: false
       max-gzip-kib:
         description: |
           Fail before deploying if the bundle's gzip size exceeds this many KiB.
@@ -165,9 +197,20 @@ on:
           the auth step skips, leaving behaviour unchanged.
         required: false
       CLOUDFLARE_API_TOKEN:
-        required: true
+        description: |
+          API token the deploy authenticates with. Needed for every real
+          deploy, and declared optional only so a `dry-run: true` caller can
+          omit it: a `required: true` secret must be passed by every caller,
+          and handing a deploy credential to a pull-request job to satisfy a
+          declaration costs more than the declaration is worth. A real deploy
+          with this empty fails at the credential check below, naming the
+          secret, rather than several minutes later as a wrangler auth error.
+        required: false
       CLOUDFLARE_ACCOUNT_ID:
-        required: true
+        description: |
+          Account the Worker deploys to. Optional for the same reason as the
+          token above, and checked the same way.
+        required: false
       WORKER_SECRETS:
         description: |
           Runtime secrets to publish onto the Worker with this deploy, as either
@@ -227,6 +270,23 @@ jobs:
       WORKER_SECRETS: ${{ secrets.WORKER_SECRETS }}
     steps:
       - uses: actions/checkout@v7
+
+      - if: ${{ !inputs.dry-run }}
+        name: Check the Cloudflare credentials are present
+        run: |
+          set -eu
+          # Both secrets are declared `required: false` so a dry-run caller can
+          # omit them, which makes an empty value reachable on the deploy path
+          # too. Unset and misnamed both interpolate to the empty string, so
+          # say which one is missing here instead of letting wrangler fail with
+          # an authentication error after the build has already run.
+          missing=""
+          [ -n "${CLOUDFLARE_API_TOKEN:-}" ] || missing="$missing CLOUDFLARE_API_TOKEN"
+          [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || missing="$missing CLOUDFLARE_ACCOUNT_ID"
+          if [ -n "$missing" ]; then
+            echo "::error::A deploy needs these secrets and they arrived empty:$missing. Check the names in the caller's secrets: block — an unset or misnamed secret is indistinguishable from an unconfigured one."
+            exit 1
+          fi
 
       - name: Authenticate to npm registry
         run: |
@@ -324,8 +384,8 @@ jobs:
           set -eu
           sh -c "$PRE_DEPLOY_COMMAND"
 
-      - if: inputs.max-gzip-kib > 0
-        name: Bundle budget gate
+      - if: ${{ inputs.max-gzip-kib > 0 || inputs.dry-run }}
+        name: Bundle size and budget gate
         working-directory: ${{ inputs.working-dir }}
         env:
           MAX_GZIP_KIB: ${{ inputs.max-gzip-kib }}
@@ -347,14 +407,22 @@ jobs:
             exit 1
           fi
 
-          echo "Bundle: ${gzip_kib} KiB gzip (ceiling ${MAX_GZIP_KIB} KiB)"
-          if awk -v a="$gzip_kib" -v b="$MAX_GZIP_KIB" 'BEGIN{exit !(a>b)}'; then
-            echo "::error::Bundle is ${gzip_kib} KiB gzip, over the ${MAX_GZIP_KIB} KiB budget"
-            exit 1
+          # The step also runs with no ceiling when `dry-run` is on, because a
+          # PR that reports the number is worth having even before anyone has
+          # agreed what the number may not exceed.
+          echo "Bundle: ${gzip_kib} KiB gzip"
+          if awk -v b="$MAX_GZIP_KIB" 'BEGIN{exit !(b>0)}'; then
+            echo "Ceiling: ${MAX_GZIP_KIB} KiB gzip"
+            if awk -v a="$gzip_kib" -v b="$MAX_GZIP_KIB" 'BEGIN{exit !(a>b)}'; then
+              echo "::error::Bundle is ${gzip_kib} KiB gzip, over the ${MAX_GZIP_KIB} KiB budget"
+              exit 1
+            fi
+          else
+            echo "No ceiling set (max-gzip-kib is 0) — reporting the size only."
           fi
           echo "bundle_gzip_kib=${gzip_kib}" >> "$GITHUB_ENV"
 
-      - if: env.WORKER_SECRETS != ''
+      - if: ${{ !inputs.dry-run && env.WORKER_SECRETS != '' }}
         name: Stage runtime secrets
         run: |
           set -euo pipefail
@@ -387,7 +455,8 @@ jobs:
             echo "WORKER_SECRET_NAMES=$(printf '%s' "$names" | tr '\n' ' ')"
           } >> "$GITHUB_ENV"
 
-      - name: Deploy
+      - if: ${{ !inputs.dry-run }}
+        name: Deploy
         id: deploy
         working-directory: ${{ inputs.working-dir }}
         env:
@@ -428,7 +497,7 @@ jobs:
           fi
           echo "All staged secrets present on the Worker: $WORKER_SECRET_NAMES"
 
-      - if: inputs.max-startup-ms > 0
+      - if: ${{ !inputs.dry-run && inputs.max-startup-ms > 0 }}
         name: Startup time gate
         working-directory: ${{ inputs.working-dir }}
         env:
@@ -453,7 +522,7 @@ jobs:
             exit 1
           fi
 
-      - if: inputs.expect-crons != ''
+      - if: ${{ !inputs.dry-run && inputs.expect-crons != '' }}
         name: Confirm the Cron Triggers registered
         working-directory: ${{ inputs.working-dir }}
         env:
@@ -549,7 +618,7 @@ jobs:
           fi
           echo "All expected Cron Triggers are registered on ${name}."
 
-      - if: inputs.verify-url != ''
+      - if: ${{ !inputs.dry-run && inputs.verify-url != '' }}
         name: Verify the deployed Worker answers
         env:
           VERIFY_URL: ${{ inputs.verify-url }}
@@ -618,11 +687,19 @@ jobs:
         env:
           WORKING_DIR: ${{ inputs.working-dir }}
           EXPECT_CRONS: ${{ inputs.expect-crons }}
+          DRY_RUN: ${{ inputs.dry-run }}
         run: |
           set -eu
           {
-            echo "### Cloudflare deploy — \`${WORKING_DIR}\`"
+            if [ "$DRY_RUN" = "true" ]; then
+              # Say it plainly. A summary reading "Cloudflare deploy" on a job
+              # that uploaded nothing is how a dry run gets mistaken for a
+              # release.
+              echo "### Cloudflare bundle check — \`${WORKING_DIR}\` (dry run, nothing uploaded)"
+            else
+              echo "### Cloudflare deploy — \`${WORKING_DIR}\`"
+            fi
             [ -n "${bundle_gzip_kib:-}" ] && echo "- bundle: ${bundle_gzip_kib} KiB gzip"
-            [ -n "${EXPECT_CRONS:-}" ] && echo "- cron triggers asserted: \`${EXPECT_CRONS}\`"
-            echo "- deploy command: \`${{ inputs.deploy-command }}\`"
+            [ -n "${EXPECT_CRONS:-}" ] && [ "$DRY_RUN" != "true" ] && echo "- cron triggers asserted: \`${EXPECT_CRONS}\`"
+            [ "$DRY_RUN" = "true" ] || echo "- deploy command: \`${{ inputs.deploy-command }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
