@@ -731,6 +731,7 @@ jobs:
           EXPECT_CRONS: ${{ inputs.expect-crons }}
           DRY_RUN: ${{ inputs.dry-run }}
           DEPLOY_COMMAND: ${{ inputs.deploy-command }}
+          DRY_RUN_COMMAND: ${{ inputs.dry-run-command }}
         run: |
           set -eu
           {
@@ -744,5 +745,13 @@ jobs:
             fi
             [ -n "${bundle_gzip_kib:-}" ] && echo "- bundle: ${bundle_gzip_kib} KiB gzip"
             [ -n "${EXPECT_CRONS:-}" ] && [ "$DRY_RUN" != "true" ] && echo "- cron triggers asserted: \`${EXPECT_CRONS}\`"
-            [ "$DRY_RUN" = "true" ] || echo "- deploy command: \`${DEPLOY_COMMAND}\`"
+            # Name the command in both modes. A dry run's entire output is one
+            # number, and `dry-run-command` is overridable and NOT derived from
+            # `deploy-command` — so a summary that omits it cannot say whether
+            # the number describes the configuration the merge will ship.
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "- bundle command: \`${DRY_RUN_COMMAND}\`"
+            else
+              echo "- deploy command: \`${DEPLOY_COMMAND}\`"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
