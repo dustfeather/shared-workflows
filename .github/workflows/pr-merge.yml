@@ -43,6 +43,20 @@ jobs:
     uses: dustfeather/shared-workflows/.github/workflows/merge-on-approval.yml@v4
     with:
       runner: arc-df-shared-workflows
+      # `direct`, not the reusable workflow's `auto` default, because
+      # tag-release.yml keys off THIS run finishing. `--auto` hands the merge
+      # to GitHub and returns straight away, so the job can complete — firing
+      # `workflow_run` — while main is still the pre-merge commit. tag-release
+      # would then find the head already tagged, log "nothing new on main to
+      # release", exit clean, and the merge would land moments later with no
+      # push event and no workflow_run left: the commit sits on main untagged
+      # for good, and the log line reads like correct behaviour.
+      #
+      # `direct` merges inside the step, so the run only completes once main
+      # has actually moved. It is also what merge-on-approval.yml documents
+      # `direct` for — no branch protection here means no required check for
+      # `--auto` to wait on anyway, so `auto` buys nothing and costs the race.
+      mode: direct
       # Rebase, not the reusable workflow's `squash` default. tag-release.yml
       # picks the version bump by scanning `#minor`/`#major` across the SUBJECT
       # of every commit in the push — subjects only, deliberately, so that
