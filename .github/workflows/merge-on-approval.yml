@@ -44,6 +44,30 @@ on:
         description: Delete the PR's head branch after a successful merge.
         type: boolean
         default: true
+      match-head-commit:
+        description: |
+          Refuse the merge unless the PR head is still this exact SHA. Empty
+          (the default) merges whatever the head is at merge time, which is
+          the prior behaviour.
+
+          An approval is given to a COMMIT; the merge is not tied to one. A
+          commit pushed between the approving review and this job landing
+          therefore gets merged unreviewed, and a caller without branch
+          protection has no stale-review dismissal to catch it. The window is
+          small; the pipeline is unattended.
+
+          Pass the review event's `commit_id` — the SHA the review actually
+          approved. It is not written out here: an expression in this
+          description would be evaluated as one, and the `on:` block is
+          parsed before any context exists, so the file would be rejected
+          outright and every caller would break. See the shim in this repo's
+          own `pr-merge.yml` for the literal form.
+
+          A head that no longer matches fails the job loudly and leaves the
+          PR open, which is the correct outcome: the new commit has not been
+          reviewed.
+        type: string
+        default: ""
       runner:
         description: |
           Self-hosted ARC scale-set label for the runner pool. Defaults to
@@ -76,6 +100,7 @@ jobs:
           MODE: ${{ inputs.mode }}
           MERGE_METHOD_INPUT: ${{ inputs.merge-method }}
           DELETE_BRANCH: ${{ inputs.delete-branch }}
+          MATCH_HEAD_COMMIT: ${{ inputs.match-head-commit }}
         run: |
           set -u
 
@@ -103,8 +128,17 @@ jobs:
             del="--delete-branch"
           fi
 
+          # Pin the merge to the reviewed commit when the caller asked for it.
+          # `gh` fails the merge if the head has moved since, which is the
+          # point: the commit that moved it has not been reviewed.
+          match=""
+          if [ -n "${MATCH_HEAD_COMMIT:-}" ]; then
+            match="--match-head-commit $MATCH_HEAD_COMMIT"
+            echo "Merge pinned to reviewed head $MATCH_HEAD_COMMIT."
+          fi
+
           if [ "$MODE" = "direct" ]; then
-            gh pr merge "$PR_URL" "$method" $del
+            gh pr merge "$PR_URL" "$method" $del $match
           else
-            gh pr merge --auto "$method" "$PR_URL" $del
+            gh pr merge --auto "$method" "$PR_URL" $del $match
           fi

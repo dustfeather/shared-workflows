@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Library of reusable GitHub Actions workflows (`workflow_call`) in `.github/workflows/`, consumed by every other repo under this account via `uses: dustfeather/shared-workflows/.github/workflows/<name>.yml@v4`. No app code. A merged change ships to every caller on next run — treat blast radius accordingly. Exception: `tag-release.yml` = this repo's own release automation, not callable.
+Library of reusable GitHub Actions workflows (`workflow_call`) in `.github/workflows/`, consumed by every other repo under this account via `uses: dustfeather/shared-workflows/.github/workflows/<name>.yml@v4`. No app code. A merged change ships to every caller on next run — treat blast radius accordingly. Two exceptions, neither callable — this repo's own automation: `tag-release.yml` (cuts the version tag) and `pr-merge.yml` (lands a PR the review agent approved).
 
 ## Verifying changes
 
@@ -16,6 +16,32 @@ No build/test; only local check = YAML parse (`python3 -c "import yaml; yaml.saf
 
 Rule of thumb: if caller's shim could keep working untouched → patch/minor; if not → major. Unsure → prefer larger bump.
 
+### How a merge reaches `tag-release.yml` — read before touching either file
+
+`pr-merge.yml` lands a PR the review agent approved, merging with the default
+`GITHUB_TOKEN`. GitHub creates **no workflow run from events raised by that
+token**, so a bot merge fires no `push` — and that suppression belongs to the
+token, not the trigger, so `pull_request: [closed]` is dead too. There is no
+merge event to listen for. `tag-release.yml` therefore has a second trigger,
+`workflow_run` on **`"PR merge on approval"` matched by NAME**: renaming
+`pr-merge.yml`'s `name:` stops all tagging and is not an error.
+
+Consequences a change here is most likely to get wrong:
+
+- **`pr-merge.yml` must merge synchronously** (`mode: direct`). `--auto`
+  returns before the merge, so the run completes — raising `workflow_run` —
+  while `main` is still the pre-merge commit; tag-release then sees the head
+  already tagged, exits clean, and the commit is stranded untagged for good.
+- **The shim's own `if:` must gate on state and draft**, duplicating what
+  `merge-on-approval.yml` checks internally. A run whose only job SKIPPED
+  still concludes `success` and still raises `workflow_run`, so without those
+  the tagger wakes on every review.
+- **`#major` behaves asymmetrically by path.** On a real push range, a
+  `#major` not on the head subject is a hard `exit 1`. On the `workflow_run`
+  path there is no push range, so the scan spans last-release-tag..HEAD and
+  re-reads every unreleased commit on every run — a refusal there would wedge
+  the workflow permanently, so it warns and downgrades instead.
+
 ## Conventions
 
 - Inputs added to reusable workflow MUST default to value preserving prior behavior.
@@ -24,7 +50,7 @@ Rule of thumb: if caller's shim could keep working untouched → patch/minor; if
 
 ## Code exploration
 
-Plain `Grep`/`Glob`/`Read` are the tools here. 17 YAML workflows, no call graph — a knowledge graph earns nothing on this repo.
+Plain `Grep`/`Glob`/`Read` are the tools here. 18 YAML workflows, no call graph — a knowledge graph earns nothing on this repo.
 
 `code-review-graph` is **CI-only**: it exists on the `actions-runner-claude` ARC image, where `claude-code-review.yml` builds it and serves it over MCP to the review agent. It is not installed locally and no session here can call those tools. Any `.code-review-graph/` dir you find in a checkout is a stale leftover (gitignored) — delete it.
 

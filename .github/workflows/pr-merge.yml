@@ -57,8 +57,14 @@ jobs:
     # which still concludes success and still raises `workflow_run`. Tagging
     # would wake on essentially every review, and the stranded-commit warning
     # would fire so routinely it would stop meaning anything.
+    # `draft` is tested here for the same reason as the state: the DRAFT
+    # filter lives in merge-on-approval.yml's inner job, so an approving
+    # review on a draft would pass this gate, skip the inner job, and still
+    # complete a run — waking tag-release and firing its stranded-commit
+    # warning with nothing merged. That warning is worth only its rarity.
     if: >-
       github.event.review.state == 'approved' &&
+      github.event.pull_request.draft == false &&
       (github.event.review.user.login == 'claude[bot]' ||
        contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.review.author_association))
     permissions:
@@ -97,6 +103,13 @@ jobs:
       # is lost and a minor bump silently lands as a patch. Rebase replays each
       # commit onto main with its subject intact.
       merge-method: rebase
+      # Merge the commit that was actually reviewed. An approval names a SHA;
+      # a merge does not. With no branch protection there is no stale-review
+      # dismissal, so a commit pushed between the approval and this job would
+      # otherwise land unreviewed — and tag-release then re-points `v4`, which
+      # all five callers, cross-owner ones included, resolve at runtime.
+      # A moved head fails the job and leaves the PR open, which is right.
+      match-head-commit: ${{ github.event.review.commit_id }}
       # `delete-branch` is deliberately NOT set. The repo carries
       # `delete_branch_on_merge: true`, which deletes the head branch on every
       # merge whatever this input says — passing `false` would only stop `gh`
