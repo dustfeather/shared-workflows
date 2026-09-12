@@ -22,41 +22,10 @@ Rule of thumb: if caller's shim could keep working untouched → patch/minor; if
 - Every workflow declares explicit top-level `permissions:` block; jobs needing more declare own. CodeQL flags missing — hard error, not warning.
 - Reusable workflows run in **caller's** context with caller's secrets. `secrets: inherit` works for same-owner callers; cross-owner (`ITGuys-RO/*`) MUST pass secrets explicitly — `inherit` does not reliably carry org-level "selected"-visibility secrets across owner boundary.
 
-<!-- code-review-graph MCP tools -->
-## MCP Tools: code-review-graph
+## Code exploration
 
-**IMPORTANT: This project has a knowledge graph. ALWAYS use the
-code-review-graph MCP tools BEFORE using Grep/Glob/Read to explore
-the codebase.** The graph is faster, cheaper (fewer tokens), and gives
-you structural context (callers, dependents, test coverage) that file
-scanning cannot.
+Plain `Grep`/`Glob`/`Read` are the tools here. 17 YAML workflows, no call graph — a knowledge graph earns nothing on this repo.
 
-### When to use graph tools FIRST
+`code-review-graph` is **CI-only**: it exists on the `actions-runner-claude` ARC image, where `claude-code-review.yml` builds it and serves it over MCP to the review agent. It is not installed locally and no session here can call those tools. Any `.code-review-graph/` dir you find in a checkout is a stale leftover (gitignored) — delete it.
 
-- **Exploring code**: `semantic_search_nodes` or `query_graph` instead of Grep
-- **Understanding impact**: `get_impact_radius` instead of manually tracing imports
-- **Code review**: `detect_changes` + `get_review_context` instead of reading entire files
-- **Finding relationships**: `query_graph` with callers_of/callees_of/imports_of/tests_for
-- **Architecture questions**: `get_architecture_overview` + `list_communities`
-
-Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
-
-### Key Tools
-
-| Tool | Use when |
-| ------ | ---------- |
-| `detect_changes` | Reviewing code changes — gives risk-scored analysis |
-| `get_review_context` | Need source snippets for review — token-efficient |
-| `get_impact_radius` | Understanding blast radius of a change |
-| `get_affected_flows` | Finding which execution paths are impacted |
-| `query_graph` | Tracing callers, callees, imports, tests, dependencies |
-| `semantic_search_nodes` | Finding functions/classes by name or keyword |
-| `get_architecture_overview` | Understanding high-level codebase structure |
-| `refactor_tool` | Planning renames, finding dead code |
-
-### Workflow
-
-1. The graph auto-updates on file changes (via hooks).
-2. Use `detect_changes` for code review.
-3. Use `get_affected_flows` to understand impact.
-4. Use `query_graph` pattern="tests_for" to check coverage.
+The local equivalent is the `graphify` CLI (pipx `graphifyy`, `graphify-out/` built in the app repos). Not wired as an MCP server; reach for it via the `graphify` skill, and only in a repo with real code to trace.
