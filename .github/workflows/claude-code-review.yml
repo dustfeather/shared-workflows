@@ -190,3 +190,34 @@ jobs:
             --thinking adaptive
             --mcp-config '{"mcpServers":{"code-review-graph":{"command":"code-review-graph","args":["serve"]}}}'
             --allowed-tools "Task,Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr review:*),Bash(gh pr comment:*),Bash(gh api:*),Bash(rtk gh pr view:*),Bash(rtk gh pr diff:*),Bash(rtk gh pr review:*),Bash(rtk gh pr comment:*),Bash(rtk gh api:*),mcp__code-review-graph__detect_changes_tool,mcp__code-review-graph__get_impact_radius_tool,mcp__code-review-graph__get_review_context_tool,mcp__code-review-graph__get_affected_flows_tool,mcp__code-review-graph__query_graph_tool,mcp__code-review-graph__semantic_search_nodes_tool,mcp__code-review-graph__get_architecture_overview_tool"
+
+      - name: Verify a review was actually submitted
+        # claude-code-action does NOT fail when its GitHub-App OIDC exchange is
+        # refused. Anthropic's backend rejects that exchange whenever the
+        # caller's triggering workflow file (e.g. pr-checks.yml) differs from
+        # the default branch — an anti-privilege-escalation guard that fires on
+        # ANY byte change to that file, even in an unrelated job. The action
+        # logs `Workflow validation failed. The workflow file must exist and
+        # have identical content to the version on the repository's default
+        # branch`, then exits 0 having posted nothing
+        # (anthropics/claude-code-action#443, #722). With every other step
+        # succeeding the run goes green and the review is silently absent, so
+        # assert the review landed rather than trusting the action's exit code.
+        #
+        # Scoped to the current head SHA: a review left on an earlier push
+        # would otherwise mask a no-op on the push being checked.
+        if: steps.codeql_gate.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -u
+          reviews=$(gh api "repos/$REPO/pulls/$PR/reviews" --paginate --jq \
+            "[.[] | select(.commit_id == \"$SHA\" and .submitted_at != null)] | length")
+          if [ "${reviews:-0}" -eq 0 ]; then
+            echo "::error::Claude Code Review submitted no review on $SHA. The usual cause is that this PR modifies the .github/workflows file which triggers the review job, so the action's OIDC token exchange is refused and it no-ops. Land the workflow change in its own PR first, then push this branch again."
+            exit 1
+          fi
+          echo "Review confirmed on $SHA ($reviews submitted)."
