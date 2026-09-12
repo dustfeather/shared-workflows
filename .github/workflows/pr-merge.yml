@@ -1,4 +1,9 @@
 name: PR merge on approval
+# DO NOT RENAME without changing tag-release.yml. Its `workflow_run` trigger
+# matches this workflow by NAME — `workflows: ["PR merge on approval"]` — not
+# by path, and a name that matches nothing is not an error. Rename one and
+# every bot merge stops being tagged, with nothing in any log saying why:
+# precisely the silent class the rest of this file exists to close.
 
 # This repo's own shim for merge-on-approval.yml — the piece it never had.
 # `pr-checks.yml` gets the review agent to approve; nothing then landed the PR,
@@ -65,7 +70,10 @@ jobs:
       # is lost and a minor bump silently lands as a patch. Rebase replays each
       # commit onto main with its subject intact.
       merge-method: rebase
-      # The branch is what a caller pins when e2e-testing an unreleased change
-      # (`@feature/<name>`), and it is the only copy of that ref. Keep it;
-      # delete by hand once the tag that supersedes it exists.
-      delete-branch: false
+      # `delete-branch` is deliberately NOT set. The repo carries
+      # `delete_branch_on_merge: true`, which deletes the head branch on every
+      # merge whatever this input says — passing `false` would only stop `gh`
+      # deleting it a second time, while documenting a guarantee the file
+      # cannot deliver. Nothing is lost either way: the `@feature/<name>` ref a
+      # caller pins to e2e-test an unreleased change is needed BEFORE the
+      # merge, and the tag supersedes it after.
