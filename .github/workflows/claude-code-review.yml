@@ -143,15 +143,18 @@ jobs:
                   • Call detect_changes / get_impact_radius on those files for blast radius, affected execution flows, and missing-test gaps.
                   • Use get_review_context / query_graph / semantic_search_nodes to pull only the relevant code (callers, callees, tests) instead of whole files.
                   • If the graph tools are unavailable or return empty (graph not built — e.g. unsupported language or build skipped), fall back to reading the diff directly with `gh pr diff`.
-              - Then dispatch these pr-review-toolkit subagents IN PARALLEL (one Task call each, in a single message):
-                  • pr-review-toolkit:code-reviewer — general correctness, security, project-convention compliance.
-                  • pr-review-toolkit:silent-failure-hunter — swallowed errors, bare catch blocks, fallbacks that mask failure. Skip only if the diff touches no error handling.
-                  • pr-review-toolkit:pr-test-analyzer — behavioural test coverage of the new logic. Skip only if the repo has no test suite at all.
-                These agents default to reviewing `git diff` of a dirty worktree. This checkout is CLEAN and shallow, so that yields nothing — every Task prompt MUST tell the agent to get the diff from
-                `gh pr diff ${{ github.event.pull_request.number }}` and to read files from the checkout, and must state the PR number and repository.
-                NEVER dispatch pr-review-toolkit:code-simplifier — it rewrites source, and this job is read-only.
-                If those subagents do not exist (this runner's image predates the plugin bake), do not retry or improvise a substitute — do the whole review yourself and carry on to the verdict.
-              - You own the verdict. The subagents report findings; you decide what is real, drop duplicates and anything outside the diff, and submit. A subagent finding is evidence, not a conclusion.
+              - Do the whole review YOURSELF. Do not dispatch subagents — you have no Task tool in this job, and spending
+                turns discovering that is how a review ends with nothing posted. Cover these passes in one head:
+                  • Correctness and security: logic errors, unhandled inputs, injection, secrets, auth and permission gaps,
+                    project-convention violations (read the repo's CLAUDE.md / AGENTS.md if present).
+                  • Swallowed failure: bare catch blocks, ignored error returns, fallbacks that mask a real fault, a default
+                    that hides a missing value. Skip if the diff touches no error handling.
+                  • Test coverage: does a behavioural test exercise the new logic, including its failure paths? Skip if the
+                    repo has no test suite.
+              - Stay inside the diff. A problem you spotted in untouched code is not this PR's verdict; mention it in the body
+                at most once, never as grounds for requesting changes.
+              - Budget your turns. The review is worthless if you run out before submitting, so stop investigating and post
+                once you can justify a verdict. Depth beyond that point buys nothing.
               - Submit the verdict and every inline finding as ONE atomic review. A single POST means the verdict can never
                 land without its comments, or the comments without a verdict:
                   gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews" --method POST --input - <<< '{"event":"APPROVE","body":"<one-sentence reasoning>","comments":[{"path":"src/foo.ts","line":42,"side":"RIGHT","body":"<finding>"}]}'
@@ -189,11 +192,14 @@ jobs:
           # implicit default fallback, so this can never silently land on
           # Sonnet or Haiku.
           #
-          # `Task` is what makes the pr-review-toolkit subagents reachable —
-          # without it they load but cannot be invoked, and the standard track
-          # silently degrades to a solo review. Read/Grep/Glob are for those
-          # subagents: the allowlist is session-wide, so a subagent inherits it
-          # and cannot open a file the parent could not.
+          # Deliberately NO `Task`. The pr-review-toolkit agents declare
+          # `Tools: All tools` but a subagent INHERITS this session-wide
+          # allow-list, so every `Bash(git ...)`, Write, TodoWrite and WebFetch
+          # call they make is denied. Widening the list does not rescue them
+          # either: this checkout is clean and shallow, so the `git diff` they
+          # default to returns nothing. Three of them retrying burned 25 denied
+          # calls across 36 turns on dosar-rapid.ro#113 and the run ended with
+          # no review posted at all. The standard track now reviews inline.
           #
           # Deliberately NO `mcp__github*` entry. The action installs its
           # bundled `github_inline_comment` MCP server only when the caller's
@@ -210,15 +216,14 @@ jobs:
           # change one, grep the other. Same for `rtk gh ...`: the rtk hook
           # rewrites every `gh` command, so both spellings must be allow-listed.
           #
-          # Cost note: 5 of the 6 plugin agents declare `model: inherit`, so
-          # each fans out at opus + effort high. That is why the standard track
-          # dispatches three, not all of them.
+          # Cost note: one opus pass, not four. The old three-subagent fan-out
+          # inherited opus + effort high per agent.
           claude_args: >-
             --model opus
             --effort high
             --thinking adaptive
             --mcp-config '{"mcpServers":{"code-review-graph":{"command":"code-review-graph","args":["serve"]}}}'
-            --allowed-tools "Task,Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr review:*),Bash(gh pr comment:*),Bash(gh api:*),Bash(rtk gh pr view:*),Bash(rtk gh pr diff:*),Bash(rtk gh pr review:*),Bash(rtk gh pr comment:*),Bash(rtk gh api:*),mcp__code-review-graph__detect_changes_tool,mcp__code-review-graph__get_impact_radius_tool,mcp__code-review-graph__get_review_context_tool,mcp__code-review-graph__get_affected_flows_tool,mcp__code-review-graph__query_graph_tool,mcp__code-review-graph__semantic_search_nodes_tool,mcp__code-review-graph__get_architecture_overview_tool"
+            --allowed-tools "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr review:*),Bash(gh pr comment:*),Bash(gh api:*),Bash(rtk gh pr view:*),Bash(rtk gh pr diff:*),Bash(rtk gh pr review:*),Bash(rtk gh pr comment:*),Bash(rtk gh api:*),mcp__code-review-graph__detect_changes_tool,mcp__code-review-graph__get_impact_radius_tool,mcp__code-review-graph__get_review_context_tool,mcp__code-review-graph__get_affected_flows_tool,mcp__code-review-graph__query_graph_tool,mcp__code-review-graph__semantic_search_nodes_tool,mcp__code-review-graph__get_architecture_overview_tool"
 
       - name: Verify a review was actually submitted
         # claude-code-action does NOT fail when its GitHub-App OIDC exchange is
@@ -246,7 +251,7 @@ jobs:
           reviews=$(gh api "repos/$REPO/pulls/$PR/reviews" --paginate --jq \
             "[.[] | select(.commit_id == \"$SHA\" and .submitted_at != null)] | length")
           if [ "${reviews:-0}" -eq 0 ]; then
-            echo "::error::Claude Code Review submitted no review on $SHA. Known causes: (1) this PR modifies the .github/workflows file which triggers the review job, so the action's OIDC token exchange is refused and it no-ops -- land the workflow change in its own PR first, then push this branch again; (2) the agent ran but never reached the closing \`gh pr review\` call, usually because a tool the prompt mandates is missing from --allowed-tools -- check the step log for permission_denials_count."
+            echo "::error::Claude Code Review submitted no review on $SHA. Known causes: (1) this PR modifies the .github/workflows file which triggers the review job, so the action's OIDC token exchange is refused and it no-ops -- land the workflow change in its own PR first, then push this branch again; (2) the agent ran but never reached the closing \`gh pr review\` call, usually because a tool the prompt mandates is missing from --allowed-tools -- check the step log for permission_denials_count. The transcript is hidden unless the caller passes show-full-output: true, so re-run with that set to see which call was denied."
             exit 1
           fi
           echo "Review confirmed on $SHA ($reviews submitted)."
