@@ -36,6 +36,14 @@ Consequences a change here is most likely to get wrong:
   `merge-on-approval.yml` checks internally. A run whose only job SKIPPED
   still concludes `success` and still raises `workflow_run`, so without those
   the tagger wakes on every review.
+- **`pr-merge.yml` pins `@v4`, which always lags this branch by one release.**
+  A `uses:` job validates its inputs against the PINNED ref, not against the
+  PR. So a PR that adds an input to a reusable workflow *and* passes it from
+  this repo's own shim in the same commit fails with `Invalid input, <name> is
+  not defined in the referenced workflow` — `startup_failure`, the merge job
+  never starts, and the PR cannot land itself. Either merge that PR by hand,
+  or split it: ship the input, let `tag-release.yml` move `v4`, then add the
+  caller.
 - **`#major` behaves asymmetrically by path.** On a real push range, a
   `#major` not on the head subject is a hard `exit 1`. On the `workflow_run`
   path there is no push range, so the scan spans last-release-tag..HEAD and
