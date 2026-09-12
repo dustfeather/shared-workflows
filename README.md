@@ -154,6 +154,8 @@ install → build → pre-deploy → budget gate → deploy
   → secrets check → startup gate → cron check → verify
 ```
 
+With `dry-run: true` the chain stops after the budget gate; see below.
+
 `pre-deploy-command` (migrations, publishing reference data) runs *before* the
 deploy on purpose. A Worker whose schema or KV is not there yet does not fail
 to start — it answers wrongly, which reads as an application bug rather than a
@@ -178,7 +180,45 @@ which disables them.
 apart by default). Skipping it is allowed and is a choice to deploy without
 checking.
 
-Secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are both required.
+Secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are needed for
+every real deploy. They are declared `required: false` only so a `dry-run`
+caller can omit them (below); a deploy that arrives without them fails at the
+first step, naming the one that is empty.
+
+#### `dry-run: true` — measure the bundle on a pull request
+
+`node-test.yml` installs, audits, typechecks and tests. **It compiles no
+Worker**, so a `wrangler`, `next` or framework bump passes a PR green and the
+production deploy is the first thing to bundle it — which is where a size
+regression, or `10021`, finally shows up.
+
+`dry-run: true` stops this workflow after the budget gate: install, build,
+`wrangler deploy --dry-run`, report the gzip size, apply `max-gzip-kib`, and
+upload nothing. Everything that touches a live Worker is skipped — the deploy,
+runtime secrets, the secrets-landed check, the startup gate, the cron check
+and the verify probe — so the same call that deploys on `main` can gate a PR
+with the thresholds changed to nothing else:
+
+```yaml
+bundle-api:
+  uses: dustfeather/shared-workflows/.github/workflows/deploy-cloudflare.yml@v4
+  with:
+    dry-run: true
+    working-dir: apps/api
+    install-dir: .
+    max-gzip-kib: 600
+  secrets:
+    NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+```
+
+**Pass no Cloudflare credentials to it.** A dry run authenticates to nothing,
+and a pull-request job is the last place to expose a deploy token.
+
+The gate it *cannot* stand in for is `max-startup-ms`: only a real upload
+measures startup time, so that number stays post-deploy and a green dry run is
+not evidence the Worker will start inside the 1 s budget. With no
+`max-gzip-kib` set, the step still runs under `dry-run` and reports the size
+without enforcing anything — worth having before anyone has agreed a ceiling.
 
 #### Verifying a hostname behind Cloudflare Access
 
