@@ -117,6 +117,23 @@ on:
           pull-request job is the last place to hand out a deploy credential.
         type: boolean
         default: false
+      dry-run-command:
+        description: |
+          Shell command the budget gate runs to bundle and measure without
+          uploading, run in `working-dir`. It must print wrangler's
+          `Total Upload … / gzip … KiB` line — that line is what the gate
+          parses, and a command that does not print it fails the gate rather
+          than passing blind.
+
+          The default measures what the DEFAULT `deploy-command` would ship,
+          and the two are not linked automatically. If you override
+          `deploy-command` — `wrangler versions upload`, a package script, or
+          anything needing `--config` or `--env` — override this to match.
+          Otherwise the gate measures a different configuration than the one
+          that deploys, which is worse than not measuring: it reports a number
+          for a build nobody ships.
+        type: string
+        default: "npx wrangler deploy --dry-run --outdir .wrangler-budget"
       max-gzip-kib:
         description: |
           Fail before deploying if the bundle's gzip size exceeds this many KiB.
@@ -404,12 +421,18 @@ jobs:
         working-directory: ${{ inputs.working-dir }}
         env:
           MAX_GZIP_KIB: ${{ inputs.max-gzip-kib }}
+          DRY_RUN_COMMAND: ${{ inputs.dry-run-command }}
         run: |
           set -euo pipefail
           # `--dry-run` bundles without uploading, so this fails BEFORE anything
           # goes live. It reports size but never startup time, which is why the
           # startup gate is a separate step after the deploy.
-          npx wrangler deploy --dry-run --outdir .wrangler-budget 2>&1 | tee budget.log
+          #
+          # This is `dry-run-command`, not `deploy-command` with flags bolted
+          # on, because `deploy-command` is arbitrary shell: `pnpm run deploy`
+          # would swallow appended flags, and `a && b` would take them on the
+          # wrong half. A caller who overrides one overrides both.
+          sh -c "$DRY_RUN_COMMAND" 2>&1 | tee budget.log
 
           # Wrangler colourises its output; strip ANSI before matching or the
           # number never parses and the gate silently passes on an empty value.
@@ -707,6 +730,7 @@ jobs:
           WORKING_DIR: ${{ inputs.working-dir }}
           EXPECT_CRONS: ${{ inputs.expect-crons }}
           DRY_RUN: ${{ inputs.dry-run }}
+          DEPLOY_COMMAND: ${{ inputs.deploy-command }}
         run: |
           set -eu
           {
@@ -720,5 +744,5 @@ jobs:
             fi
             [ -n "${bundle_gzip_kib:-}" ] && echo "- bundle: ${bundle_gzip_kib} KiB gzip"
             [ -n "${EXPECT_CRONS:-}" ] && [ "$DRY_RUN" != "true" ] && echo "- cron triggers asserted: \`${EXPECT_CRONS}\`"
-            [ "$DRY_RUN" = "true" ] || echo "- deploy command: \`${{ inputs.deploy-command }}\`"
+            [ "$DRY_RUN" = "true" ] || echo "- deploy command: \`${DEPLOY_COMMAND}\`"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -193,11 +193,10 @@ production deploy is the first thing to bundle it — which is where a size
 regression, or `10021`, finally shows up.
 
 `dry-run: true` stops this workflow after the budget gate: install, build,
-`wrangler deploy --dry-run`, report the gzip size, apply `max-gzip-kib`, and
-upload nothing. Everything that reaches outside the runner is skipped — the
-deploy, runtime secrets, the secrets-landed check, `pre-deploy-command`, the
-startup gate, the cron check and the verify probe — so the same inputs that
-deploy on `main` gate a PR with only the thresholds to think about:
+`dry-run-command`, report the gzip size, apply `max-gzip-kib`, and upload
+nothing. Everything that reaches outside the runner is skipped — the deploy,
+runtime secrets, the secrets-landed check, `pre-deploy-command`, the startup
+gate, the cron check and the verify probe:
 
 ```yaml
 bundle-api:
@@ -212,7 +211,25 @@ bundle-api:
 ```
 
 **Pass no Cloudflare credentials to it.** A dry run authenticates to nothing,
-and a pull-request job is the last place to expose a deploy token.
+and a pull-request job is the last place to expose a deploy token. Verified
+rather than assumed: `npx wrangler deploy --dry-run --outdir` on a real Worker
+exits 0 and prints its `Total Upload … / gzip …` line with
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` both empty, every other
+`CLOUDFLARE_*` variable unset, and `HOME`/`XDG_CONFIG_HOME` pointed at an empty
+directory so wrangler's own stored login is gone too — same figure as the
+authenticated run, to the hundredth of a KiB.
+
+**If you override `deploy-command`, override `dry-run-command` too.** The gate
+does not derive one from the other, and it cannot: `deploy-command` is
+arbitrary shell, so `pnpm run deploy` would swallow appended flags and
+`a && b` would take them on the wrong half. What the gate runs is
+`dry-run-command`, defaulting to
+`npx wrangler deploy --dry-run --outdir .wrangler-budget` — which measures what
+the DEFAULT deploy command would ship. A caller deploying with
+`wrangler versions upload`, a package script, or anything needing `--config` or
+`--env` gets a number for a build nobody ships unless they set both. Whatever
+you set must print wrangler's `Total Upload … / gzip … KiB` line; the gate
+fails rather than passing blind if it cannot parse one.
 
 **Two things a copied deploy job brings with it that this input cannot switch
 off.** `environment:` is a property of the *calling* job, not of these inputs,
