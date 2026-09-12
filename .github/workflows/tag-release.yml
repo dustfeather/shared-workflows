@@ -104,6 +104,17 @@ jobs:
           # head is already what the last release tagged, there is nothing new
           # on main, so skip instead of cutting a version for no change.
           if [ -n "$released" ] && [ "$released" = "$GITHUB_SHA" ]; then
+            if [ "$GITHUB_EVENT_NAME" = "workflow_run" ]; then
+              # Say it loudly on this path. The benign reading is a merge run
+              # that merged nothing. The other reading is that a merge did
+              # happen but main had not moved yet when this run was handed its
+              # SHA — and then the commit is stranded, because a bot merge
+              # raises no push event and there is no second workflow_run
+              # coming. `mode: direct` in pr-merge.yml is what rules that out;
+              # this warning is here so that if it ever regresses, the miss is
+              # visible instead of reading as a clean no-op.
+              echo "::warning::v${latest} already points at ${GITHUB_SHA}, so this merge-run completion had nothing to release. Expected when the trusted-trigger gate skipped or the review was not an approval. If a merge DID land around now, it is untagged and needs one by hand — check that pr-merge.yml still passes mode: direct."
+            fi
             echo "v${latest} already points at ${GITHUB_SHA} — nothing new on main to release."
             echo "tag=" >> "$GITHUB_OUTPUT"
             exit 0
@@ -128,12 +139,15 @@ jobs:
           if [ -n "${BEFORE:-}" ] \
              && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
              && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            range_src=push
             msg=$(git log --format='%s' "${BEFORE}..${GITHUB_SHA}")
             echo "Scanning $(git rev-list --count "${BEFORE}..${GITHUB_SHA}") commit subject(s) in this push for a bump token."
           elif [ -n "$released" ]; then
+            range_src=tag
             msg=$(git log --format='%s' "${released}..${GITHUB_SHA}")
             echo "No usable push range; scanning $(git rev-list --count "${released}..${GITHUB_SHA}") commit subject(s) since v${latest}."
           else
+            range_src=head-only
             msg=$(git log -1 --format='%s' HEAD)
             echo "No usable push range and no prior release tag; scanning HEAD's subject only."
           fi
@@ -150,8 +164,20 @@ jobs:
           # a token that was meant seriously deserves an explicit re-push.
           if [ "$bump" = major ] \
              && ! git log -1 --format='%s' "$GITHUB_SHA" | grep -Fq '#major'; then
-            echo "::error::A major token was found in this push, but not in the head commit's subject. Refusing to cut v$((major + 1)).0.0 — it would strand every caller pinned to v${major}. Re-push with the token on the head commit subject if it is intended."
-            exit 1
+            if [ "$range_src" = push ]; then
+              echo "::error::A major token was found in this push, but not in the head commit's subject. Refusing to cut v$((major + 1)).0.0 — it would strand every caller pinned to v${major}. Re-push with the token on the head commit subject if it is intended."
+              exit 1
+            fi
+            # Refusing here instead would WEDGE the workflow. A tag-scoped
+            # range is not one push's worth of commits: it re-reads every
+            # unreleased commit on main, every run. So one `#major` subject
+            # that landed without being on a head would make this refusal fire
+            # forever — every later merge rescans it and dies — with no push
+            # range to narrow it and no self-healing. The push path above self
+            # heals precisely because its next range excludes the commit.
+            echo "::warning::A #major token appears on an unreleased commit that is not the head, and this run has no push range to narrow the scan to. Ignoring it rather than failing every future run — re-push with the token on the head subject to cut a major deliberately."
+            if printf '%s' "$msg" | grep -Fq '#minor'; then bump=minor; else bump=patch; fi
+            echo "Bump downgraded to: $bump"
           fi
 
           case "$bump" in
