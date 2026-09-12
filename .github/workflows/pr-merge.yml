@@ -23,6 +23,15 @@ on:
 permissions:
   contents: read
 
+# One merge attempt per PR at a time. Two approvals landing close together —
+# the agent's and the owner's — would otherwise start two runs, and the loser
+# fails against an already-merged PR. That failure is indistinguishable from
+# the one case a human should act on (a merge that genuinely could not land),
+# so it has to not happen rather than be explained away. Not
+# `cancel-in-progress`: a merge already in flight must finish.
+concurrency:
+  group: pr-merge-${{ github.event.pull_request.number }}
+
 jobs:
   merge:
     # Trusted-trigger gate. merge-on-approval.yml decides what an APPROVAL is
@@ -39,9 +48,19 @@ jobs:
     # `claude[bot]` is named explicitly because the review agent's
     # `author_association` is NONE, not OWNER/MEMBER/COLLABORATOR — the
     # association test alone would reject the very approval this exists for.
+    #
+    # The state test is NOT redundant with merge-on-approval.yml's own. That
+    # one decides whether to MERGE; this one decides whether this workflow
+    # RUNS at all — and tag-release.yml keys off this run completing. Without
+    # it, every review the agent posts (four `changes_requested` on this PR
+    # alone) starts a run named "PR merge on approval" whose inner job skips,
+    # which still concludes success and still raises `workflow_run`. Tagging
+    # would wake on essentially every review, and the stranded-commit warning
+    # would fire so routinely it would stop meaning anything.
     if: >-
-      github.event.review.user.login == 'claude[bot]' ||
-      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.review.author_association)
+      github.event.review.state == 'approved' &&
+      (github.event.review.user.login == 'claude[bot]' ||
+       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.review.author_association))
     permissions:
       contents: write
       pull-requests: write
@@ -61,6 +80,14 @@ jobs:
       # has actually moved. It is also what merge-on-approval.yml documents
       # `direct` for — no branch protection here means no required check for
       # `--auto` to wait on anyway, so `auto` buys nothing and costs the race.
+      #
+      # `direct` does not retry, and that is the intended failure mode. If the
+      # merge cannot land — mergeability not computed yet, a conflict, main
+      # moved between the approval and the merge — the run goes RED and the PR
+      # stays open. Nothing re-triggers it: another approving review does, but
+      # the agent will not post one unprompted. Push to the branch (which
+      # re-runs the review) or merge by hand. A red run left visible is the
+      # right outcome; the alternative is a retry loop racing whatever moved.
       mode: direct
       # Rebase, not the reusable workflow's `squash` default. tag-release.yml
       # picks the version bump by scanning `#minor`/`#major` across the SUBJECT
