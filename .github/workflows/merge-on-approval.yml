@@ -102,7 +102,15 @@ jobs:
           DELETE_BRANCH: ${{ inputs.delete-branch }}
           MATCH_HEAD_COMMIT: ${{ inputs.match-head-commit }}
         run: |
-          set -u
+          # Strictness stated, not assumed. A `run:` step with no `shell:`
+          # is executed as `bash -e {0}`, so `-e` is already on — GitHub's
+          # reference is explicit that bash and sh "enforce fail-fast using
+          # set -e". `-o pipefail` is NOT on: that arrives only with an
+          # explicit `shell: bash`. Spelling all three out fixes the real
+          # gap, keeps the guarantees stable if a `shell:` is ever added or
+          # the default changes, and says plainly which ones the script
+          # below relies on.
+          set -euo pipefail
 
           # Resolve merge method. "auto" detects the first allowed method on
           # the repo; anything else maps straight to the gh flag.
