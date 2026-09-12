@@ -231,13 +231,20 @@ the DEFAULT deploy command would ship. A caller deploying with
 you set must print wrangler's `Total Upload … / gzip … KiB` line; the gate
 fails rather than passing blind if it cannot parse one.
 
-**Two things a copied deploy job brings with it that this input cannot switch
-off.** `environment:` is a property of the *calling* job, not of these inputs,
-so a dry run copied from a job that names a production environment queues
-against that environment's protection rules and sits waiting for a reviewer on
-every pull request — drop the key. And `pre-deploy-command`, though it is
-skipped under `dry-run`, is worth deleting from the copy anyway: leaving it in
-records an intention the job does not carry out.
+**Two things a copied deploy job brings with it that `dry-run` cannot switch
+off.** `environment` is an input of this workflow, applied to the deploy job,
+and nothing about `dry-run` overrides it — so a dry run copied from a job
+passing `environment: production` queues against that environment's protection
+rules and sits waiting for a reviewer on every pull request. Drop it from
+`with:`. (It is not a key on your own job: GitHub does not allow `environment:`
+on a job that uses `uses:`, so there is nothing to remove there.) The one case
+for keeping it is an environment that carries **secrets the build itself
+needs** rather than protection rules; then the queueing is the price, and it is
+worth checking whether those secrets can be repo-scoped instead.
+
+And `pre-deploy-command`, though it is skipped under `dry-run`, is worth
+deleting from the copy anyway: leaving it in records an intention the job does
+not carry out.
 
 The gate it *cannot* stand in for is `max-startup-ms`: only a real upload
 measures startup time, so that number stays post-deploy and a green dry run is
