@@ -8,7 +8,7 @@
 #   concurrency: { group: release, cancel-in-progress: true }
 #   jobs:
 #     release:
-#       uses: dustfeather/shared-workflows/.github/workflows/release-extension.yml@v4
+#       uses: dustfeather/shared-workflows/.github/workflows/release-extension.yml@v5
 #       with:
 #         runner: arc-df-<repo>
 #         targets: '["chrome","firefox"]'   # discord-purge adds "userscript"
@@ -61,7 +61,7 @@ jobs:
   tests:
     permissions:
       contents: read
-    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v4
+    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v5
     with:
       runner: ${{ inputs.runner }}
 
@@ -202,7 +202,7 @@ jobs:
   publish-chrome:
     needs: [prepare, build]
     if: contains(fromJSON(inputs.targets), 'chrome')
-    uses: dustfeather/shared-workflows/.github/workflows/publish-chrome.yml@v4
+    uses: dustfeather/shared-workflows/.github/workflows/publish-chrome.yml@v5
     with:
       runner: ${{ inputs.runner }}
       artifact-name: extensions-chrome
@@ -212,7 +212,7 @@ jobs:
   publish-firefox:
     needs: [prepare, build]
     if: contains(fromJSON(inputs.targets), 'firefox')
-    uses: dustfeather/shared-workflows/.github/workflows/publish-firefox.yml@v4
+    uses: dustfeather/shared-workflows/.github/workflows/publish-firefox.yml@v5
     with:
       runner: ${{ inputs.runner }}
       artifact-name: extensions-firefox

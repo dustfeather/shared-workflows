@@ -10,11 +10,17 @@ extension publishing, and anything else that recurs.
 
 ### `node-test.yml` — Node.js audit / lint / typecheck / test / build
 
-Reusable workflow that installs dependencies and runs `lint`,
-`typecheck`, `test`, and (opt-in) `build` package.json scripts —
-skipping any that don't exist with a notice. Auto-detects the package
-manager from the lockfile (pnpm > yarn > bun > npm) and supports an
-explicit override. Defaults to Node 24.
+Reusable workflow that installs dependencies and runs the `lint`,
+`typecheck`, `test` and `build` package.json scripts — skipping any that
+don't exist with a notice. Auto-detects the package manager from the
+lockfile (pnpm > yarn > bun > npm) and supports an explicit override.
+Defaults to Node 26.
+
+**All four gates are on by default as of `v5`**; `run-build` used to
+default to `false`, which meant a caller that passed nothing got a step
+reporting `skipped` — the same colour, on a green run, as one that ran.
+Opt out per gate with `with: run-build: false` (or `run-lint`,
+`run-test`, `run-typecheck`).
 
 It also runs a dependency vulnerability audit (`npm audit` / `pnpm
 audit` / `yarn audit` / `bun audit`, matched to the detected package
@@ -24,14 +30,47 @@ ship on a high/critical advisory. Tune with `with: audit-level: …`
 (`low`/`moderate`/`high`/`critical`) or turn it off with `with:
 run-audit: false`.
 
-Pass `with: run-build: true` for projects (e.g. browser extensions)
-where the build itself is the most useful PR-time check; that way the
-PR-time `tests.yml` shim subsumes what a separate `build.yml` would
-have done.
-
 Optionally pass `secrets: NPM_TOKEN` to authenticate to
 registry.npmjs.org for both the install and the audit — see
 [Registry authentication](#registry-authentication-npm_token).
+
+#### `ci:setup` — running something before the gates
+
+A gate whose script needs a file that isn't tracked — types emitted by
+`wrangler types`, a config rendered from a template, any codegen — has
+nowhere to produce it: on a fresh checkout the gate just fails. Add a
+`ci:setup` script to package.json and this workflow runs it after
+install and before everything else, audit included:
+
+```jsonc
+"scripts": {
+  "ci:setup": "wrangler types && envsubst < wrangler.toml.example > wrangler.toml"
+}
+```
+
+Rename it with `with: script-setup: …`. The name is namespaced on
+purpose: `prepare` already fires on install and `prebuild` already fires
+around `build` (pnpm 10, no config needed), so a hook on either would run
+at times nobody asked for, and twice when a step also invoked it.
+
+Keeping the logic in package.json rather than in workflow YAML is the
+point — it is shellcheck-able, versioned with the code it supports, and
+reproducible on a developer's machine, none of which is true of a shell
+string living in a caller's `with:` block.
+
+#### Naming a script that doesn't exist fails the job
+
+Every `script-*` input follows one rule: left at its default and absent
+from package.json, the gate skips and says so in the run summary; **passed
+explicitly and absent, the job fails.** Naming a script states an
+expectation, and a typo in that name has to be loud — otherwise the new
+input reproduces exactly the silent-skip that `run-build` used to.
+
+One gap, by construction: `workflow_call` exposes no "was this input
+supplied" flag, so value-differs-from-default is the only available proxy.
+Passing a `script-*` input explicitly *at* its default is indistinguishable
+from not passing it and stays silent. That can only under-report; it never
+fails a caller who did nothing wrong.
 
 ### `python-test.yml` — Python ruff + pytest
 
@@ -98,9 +137,10 @@ jobs:
   tests:
     if: github.event.action != 'closed'
     permissions: { contents: read }
-    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v4
-    with:
-      run-build: true   # extension repos / projects with a meaningful build script
+    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v5
+    # every gate is on by default in v5; opt out per gate, e.g.
+    # with:
+    #   run-build: false
   review:
     if: github.event.action != 'closed'
     needs: tests   # review skips if tests fail
@@ -109,7 +149,7 @@ jobs:
       pull-requests: write
       issues: read
       id-token: write
-    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v4
+    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v5
     secrets: inherit  # use explicit pass for cross-owner — see "Cross-owner callers"
 ```
 
@@ -200,7 +240,7 @@ gate, the cron check and the verify probe:
 
 ```yaml
 bundle-api:
-  uses: dustfeather/shared-workflows/.github/workflows/deploy-cloudflare.yml@v4
+  uses: dustfeather/shared-workflows/.github/workflows/deploy-cloudflare.yml@v5
   with:
     dry-run: true
     working-dir: apps/api
@@ -264,7 +304,7 @@ Pass an Access **service token** and the verify step sends it as the
 
 ```yaml
 deploy-api:
-  uses: dustfeather/shared-workflows/.github/workflows/deploy-cloudflare.yml@v4
+  uses: dustfeather/shared-workflows/.github/workflows/deploy-cloudflare.yml@v5
   with:
     working-dir: apps/api
     verify-url: https://gated.example.com/api/v1/health
@@ -325,7 +365,7 @@ wrangler config; `worker-name` overrides it if both fail.
 
 ```yaml
 deploy-cron-worker:
-  uses: dustfeather/shared-workflows/.github/workflows/deploy-cloudflare.yml@v4
+  uses: dustfeather/shared-workflows/.github/workflows/deploy-cloudflare.yml@v5
   with:
     working-dir: workers/gw2roi
     expect-crons: 0 * * * *
@@ -360,7 +400,7 @@ already exist, which is false on a first-ever deploy.
 ```yaml
 deploy-api:
   needs: test
-  uses: dustfeather/shared-workflows/.github/workflows/deploy-cloudflare.yml@v4
+  uses: dustfeather/shared-workflows/.github/workflows/deploy-cloudflare.yml@v5
   with:
     working-dir: apps/api
     install-dir: .
@@ -423,13 +463,13 @@ build:
   permissions:
     contents: read
     packages: write        # only this job needs it
-  uses: dustfeather/shared-workflows/.github/workflows/build-push-image.yml@v4
+  uses: dustfeather/shared-workflows/.github/workflows/build-push-image.yml@v5
 
 deploy:
   needs: build
   permissions:
     contents: read         # deploy never needs more
-  uses: dustfeather/shared-workflows/.github/workflows/deploy-k8s.yml@v4
+  uses: dustfeather/shared-workflows/.github/workflows/deploy-k8s.yml@v5
   with:
     image: ${{ needs.build.outputs.image }}
 ```
@@ -465,7 +505,7 @@ build:
   permissions:
     contents: read
     packages: write
-  uses: dustfeather/shared-workflows/.github/workflows/build-push-image.yml@v4
+  uses: dustfeather/shared-workflows/.github/workflows/build-push-image.yml@v5
   with:
     runner: arc-itguys-ro-apps-page
 
@@ -473,7 +513,7 @@ deploy:
   needs: build
   permissions:
     contents: read
-  uses: dustfeather/shared-workflows/.github/workflows/deploy-k8s.yml@v4
+  uses: dustfeather/shared-workflows/.github/workflows/deploy-k8s.yml@v5
   with:
     namespace: apps-page
     runner: arc-itguys-ro-apps-page
@@ -490,7 +530,7 @@ No-build caller with a real post-deploy assertion:
 
 ```yaml
 deploy:
-  uses: dustfeather/shared-workflows/.github/workflows/deploy-k8s.yml@v4
+  uses: dustfeather/shared-workflows/.github/workflows/deploy-k8s.yml@v5
   with:
     namespace: dosar-rapid-render
     runner: arc-df-dosar-rapid
@@ -666,7 +706,7 @@ Deploy caller — a pinned chart, values from the repo, atomic:
 helm:
   permissions:
     contents: read
-  uses: dustfeather/shared-workflows/.github/workflows/deploy-helm.yml@v4
+  uses: dustfeather/shared-workflows/.github/workflows/deploy-helm.yml@v5
   with:
     namespace: nextcloud
     release: nextcloud
@@ -686,7 +726,7 @@ The same workflow as a PR gate — one word different, and nothing is written:
 
 ```yaml
 validate-chart:
-  uses: dustfeather/shared-workflows/.github/workflows/deploy-helm.yml@v4
+  uses: dustfeather/shared-workflows/.github/workflows/deploy-helm.yml@v5
   with:
     namespace: nextcloud
     release: nextcloud
@@ -723,7 +763,7 @@ on:
 
 jobs:
   review:
-    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v4
+    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v5
     secrets: inherit
 ```
 
@@ -743,7 +783,7 @@ on:
 
 jobs:
   claude:
-    uses: dustfeather/shared-workflows/.github/workflows/claude.yml@v4
+    uses: dustfeather/shared-workflows/.github/workflows/claude.yml@v5
     secrets: inherit
 ```
 
@@ -803,7 +843,7 @@ When the calling repo is owned by the same account as `shared-workflows`
 ```yaml
 jobs:
   review:
-    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v4
+    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v5
     secrets: inherit
 ```
 
@@ -831,7 +871,7 @@ and forwarded as a named secret:
 ```yaml
 jobs:
   review:
-    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v4
+    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v5
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
@@ -855,7 +895,7 @@ Example (private repo where another teammate should also be able to invoke):
 ```yaml
 jobs:
   review:
-    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v4
+    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v5
     with:
       trusted-actors: "dustfeather,collaborator-handle"
     secrets: inherit
@@ -863,7 +903,7 @@ jobs:
 
 ## Versioning
 
-Callers pin to `@v4` (the current moving major-version tag, GitHub Actions
+Callers pin to `@v5` (the current moving major-version tag, GitHub Actions
 convention). Every push to `main` is auto-tagged by
 `.github/workflows/tag-release.yml`: by default it bumps the **patch**
 component by one (wrapping at 100 into minor; minor grows without bound),
@@ -877,9 +917,9 @@ Pick the bump by what changes for **callers** of these reusable workflows:
 
 | Bump | Token | When | Caller impact |
 |---|---|---|---|
-| **patch** | _(default, or `#patch`)_ | Bug fix in a workflow; doc-only change; internal refactor; bumping an action used *inside* a workflow with no interface change; log/wording tweaks. | None — `@v4` callers get it automatically, nothing to do. |
+| **patch** | _(default, or `#patch`)_ | Bug fix in a workflow; doc-only change; internal refactor; bumping an action used *inside* a workflow with no interface change; log/wording tweaks. | None — `@v5` callers get it automatically, nothing to do. |
 | **minor** | `#minor` | Backwards-compatible feature: a new **optional** input (with a default), a brand-new workflow, a new opt-in job/step, broadened behavior that callers don't have to react to. | None required; new capability is available if they want it. |
-| **major** | `#major` | Breaking change to a workflow's contract: removing/renaming an input or secret, adding a **required** input, changing a default in a way callers must account for, requiring callers to grant new permissions, removing a workflow, renaming a job output. | **Callers on `@v4` would break.** A `#major` bump rolls the version to `vN+1`; update the README usage examples and tell callers to re-pin to `@vN+1`. |
+| **major** | `#major` | Breaking change to a workflow's contract: removing/renaming an input or secret, adding a **required** input, changing a default in a way callers must account for, requiring callers to grant new permissions, removing a workflow, renaming a job output. | **Callers on `@v5` would break.** A `#major` bump rolls the version to `vN+1`; update the README usage examples and tell callers to re-pin to `@vN+1`. |
 
 Rule of thumb: if a caller's shim workflow could keep working untouched →
 patch or minor; if it couldn't → major. When unsure, prefer the larger bump.
@@ -897,14 +937,14 @@ uploads an artifact named `extensions` containing the packaged `.zip`,
 ```yaml
 publish-chrome:
   needs: build
-  uses: dustfeather/shared-workflows/.github/workflows/publish-chrome.yml@v4
+  uses: dustfeather/shared-workflows/.github/workflows/publish-chrome.yml@v5
   with:
     zip-name: my-ext-chrome-${{ needs.build.outputs.tag }}.zip
   secrets: inherit
 
 publish-firefox:
   needs: build
-  uses: dustfeather/shared-workflows/.github/workflows/publish-firefox.yml@v4
+  uses: dustfeather/shared-workflows/.github/workflows/publish-firefox.yml@v5
   with:
     xpi-name: my-ext-firefox-${{ needs.build.outputs.tag }}.xpi
     source-name: source-${{ needs.build.outputs.tag }}.zip

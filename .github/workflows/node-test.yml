@@ -32,8 +32,33 @@ on:
         description: Directory containing package.json
         type: string
         default: "."
+      script-setup:
+        description: |
+          package.json script run after install and before every gate —
+          codegen, type emission, rendering a config file: anything a later
+          script needs on disk but the repo does not track.
+
+          Named `ci:setup` rather than the obvious candidates because both of
+          those are already live pnpm lifecycle hooks: with
+          `enable-pre-post-scripts` unset, pnpm 10 runs `prepare` on install
+          and `prebuild` around `build`. A hook on either name would fire at
+          times nobody asked for, and twice when a step also invokes it.
+
+          Left at its default and absent from package.json, the step skips
+          silently, so adopting this is a no-op for existing callers. Named
+          explicitly and absent, the job fails — see the note on script-lint.
+        type: string
+        default: "ci:setup"
       script-lint:
-        description: package.json script name for lint
+        description: |
+          package.json script name for lint.
+
+          Every script-* input follows the same rule: left at its default and
+          absent from package.json, the gate skips (and says so in the run
+          summary); passed explicitly and absent, the job FAILS. Naming a
+          script states an expectation, and a typo in that name has to be
+          loud — a silently skipped gate reads exactly like a passing one,
+          which is the failure mode that produced this rule.
         type: string
         default: lint
       script-test:
@@ -59,12 +84,23 @@ on:
         default: true
       run-build:
         description: |
-          Run the build script to verify it succeeds end-to-end. Off by
-          default because not every project has a meaningful `build`
-          script in CI. Turn on for projects (e.g. browser extensions)
-          where the build itself is the most useful PR-time check.
+          Run the build script to verify it succeeds end-to-end. On by
+          default as of v5, matching run-lint/run-test/run-typecheck: the
+          gate turns on script presence alone, and a project with no `build`
+          script is unaffected because the step self-skips.
+
+          It defaulted to false through v4, which meant a caller that passed
+          nothing got no build gate and a step reporting `skipped` — visually
+          identical, on a green run, to one that ran. Reasoning from
+          run-test's default to this one did not hold, and `grep run-build`
+          in a caller returned nothing, which reads as "no toggle is
+          suppressing it" when it means "the default is in force".
+
+          Pass `run-build: false` explicitly to opt out. Worth doing when the
+          build needs something the reusable job cannot produce — though
+          script-setup now covers most of that.
         type: boolean
-        default: false
+        default: true
       run-audit:
         description: |
           Run a dependency vulnerability audit (`npm audit` / `pnpm audit` /
@@ -188,6 +224,78 @@ jobs:
             bun)  bun install --frozen-lockfile ;;
           esac
 
+      # Detection moved ahead of the audit in v5: the setup script runs before
+      # everything else, and whether it exists has to be known before it can.
+      - name: Detect which scripts exist in package.json
+        id: scripts
+        env:
+          SETUP: ${{ inputs.script-setup }}
+          LINT:  ${{ inputs.script-lint }}
+          TEST:  ${{ inputs.script-test }}
+          TC:    ${{ inputs.script-typecheck }}
+          BLD:   ${{ inputs.script-build }}
+        run: |
+          has() { jq -e --arg s "$1" '.scripts[$s] // empty' package.json >/dev/null 2>&1 && echo true || echo false; }
+          echo "has_setup=$(has "$SETUP")"          >> "$GITHUB_OUTPUT"
+          echo "has_lint=$(has "$LINT")"            >> "$GITHUB_OUTPUT"
+          echo "has_test=$(has "$TEST")"            >> "$GITHUB_OUTPUT"
+          echo "has_typecheck=$(has "$TC")"         >> "$GITHUB_OUTPUT"
+          echo "has_build=$(has "$BLD")"            >> "$GITHUB_OUTPUT"
+
+      # A caller that NAMES a script states an expectation, so a typo in that
+      # name has to be loud: a skipped gate and a passing one are the same
+      # colour on a green run. `workflow_call` exposes no "was this input
+      # supplied" flag, so value != default is the only available proxy —
+      # passing a script-* input explicitly AT its default is indistinguishable
+      # from not passing it at all and stays silent. That gap only ever
+      # under-reports; it cannot fail a caller who did nothing wrong.
+      - name: Verify explicitly named scripts exist
+        env:
+          SETUP: ${{ inputs.script-setup }}
+          LINT:  ${{ inputs.script-lint }}
+          TEST:  ${{ inputs.script-test }}
+          TC:    ${{ inputs.script-typecheck }}
+          BLD:   ${{ inputs.script-build }}
+          HAS_SETUP: ${{ steps.scripts.outputs.has_setup }}
+          HAS_LINT:  ${{ steps.scripts.outputs.has_lint }}
+          HAS_TEST:  ${{ steps.scripts.outputs.has_test }}
+          HAS_TC:    ${{ steps.scripts.outputs.has_typecheck }}
+          HAS_BLD:   ${{ steps.scripts.outputs.has_build }}
+        run: |
+          set -u
+          missing=()
+          # $1 input name, $2 supplied value, $3 this input's default, $4 has_*
+          check() {
+            if [ "$2" != "$3" ] && [ "$4" != "true" ]; then
+              missing+=("$1 names '$2'")
+            fi
+          }
+          check script-setup     "$SETUP" "ci:setup"  "$HAS_SETUP"
+          check script-lint      "$LINT"  "lint"      "$HAS_LINT"
+          check script-test      "$TEST"  "test"      "$HAS_TEST"
+          check script-typecheck "$TC"    "typecheck" "$HAS_TC"
+          check script-build     "$BLD"   "build"     "$HAS_BLD"
+          if [ ${#missing[@]} -gt 0 ]; then
+            for m in "${missing[@]}"; do
+              echo "::error::$m, but package.json has no such script."
+            done
+            exit 1
+          fi
+
+      # Runs before the audit so that everything downstream — audit included —
+      # sees whatever it puts on disk. Skips silently when the script is
+      # absent; the step above is what makes a misnamed one fail instead.
+      - if: steps.scripts.outputs.has_setup == 'true'
+        name: Setup
+        env: { PM: "${{ steps.pm.outputs.pm }}", SCRIPT: "${{ inputs.script-setup }}" }
+        run: |
+          case "$PM" in
+            pnpm) pnpm run "$SCRIPT" ;;
+            npm)  npm run "$SCRIPT" ;;
+            yarn) yarn run "$SCRIPT" ;;
+            bun)  bun run "$SCRIPT" ;;
+          esac
+
       - if: inputs.run-audit
         name: Audit dependencies
         env:
@@ -228,20 +336,6 @@ jobs:
               fi
               ;;
           esac
-
-      - name: Detect which scripts exist in package.json
-        id: scripts
-        env:
-          LINT: ${{ inputs.script-lint }}
-          TEST: ${{ inputs.script-test }}
-          TC:   ${{ inputs.script-typecheck }}
-          BLD:  ${{ inputs.script-build }}
-        run: |
-          has() { jq -e --arg s "$1" '.scripts[$s] // empty' package.json >/dev/null 2>&1 && echo true || echo false; }
-          echo "has_lint=$(has "$LINT")"            >> "$GITHUB_OUTPUT"
-          echo "has_test=$(has "$TEST")"            >> "$GITHUB_OUTPUT"
-          echo "has_typecheck=$(has "$TC")"         >> "$GITHUB_OUTPUT"
-          echo "has_build=$(has "$BLD")"            >> "$GITHUB_OUTPUT"
 
       - if: inputs.run-lint && steps.scripts.outputs.has_lint == 'true'
         name: Lint

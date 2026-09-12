@@ -18,11 +18,11 @@ name: Build and push image (reusable)
 #
 #   build:
 #     permissions: { contents: read, packages: write }
-#     uses: dustfeather/shared-workflows/.github/workflows/build-push-image.yml@v4
+#     uses: dustfeather/shared-workflows/.github/workflows/build-push-image.yml@v5
 #   deploy:
 #     needs: build
 #     permissions: { contents: read }
-#     uses: dustfeather/shared-workflows/.github/workflows/deploy-k8s.yml@v4
+#     uses: dustfeather/shared-workflows/.github/workflows/deploy-k8s.yml@v5
 #     with:
 #       image: ${{ needs.build.outputs.image }}
 
