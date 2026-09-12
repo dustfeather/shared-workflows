@@ -20,9 +20,23 @@ permissions:
 
 jobs:
   merge:
-    # merge-on-approval.yml re-checks `approved` and non-draft itself; the
-    # trigger is left unfiltered here so the reusable workflow stays the single
-    # place that decides what an approval is.
+    # Trusted-trigger gate. merge-on-approval.yml decides what an APPROVAL is
+    # (state, draft) but deliberately does not decide WHO may approve — its
+    # header defers that to the caller's branch protection. This repo is
+    # public and `main` is unprotected, so without a gate here any account
+    # could submit an approving review on any open PR and land it on main.
+    # tag-release.yml would then re-point `v4`, which every caller resolves at
+    # runtime, cross-owner `ITGuys-RO/*` repos included. Self-approval is
+    # blocked by GitHub; a second throwaway account is not a barrier.
+    # dependabot-auto-merge.yml calls its equivalent check a trusted-trigger
+    # gate for the same reason.
+    #
+    # `claude[bot]` is named explicitly because the review agent's
+    # `author_association` is NONE, not OWNER/MEMBER/COLLABORATOR — the
+    # association test alone would reject the very approval this exists for.
+    if: >-
+      github.event.review.user.login == 'claude[bot]' ||
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.review.author_association)
     permissions:
       contents: write
       pull-requests: write
@@ -30,11 +44,12 @@ jobs:
     with:
       runner: arc-df-shared-workflows
       # Rebase, not the reusable workflow's `squash` default. tag-release.yml
-      # picks the version bump by scanning `#minor`/`#major` across the subject
-      # and body of EVERY commit in the push; a squash collapses the branch to
-      # one commit whose body depends on the repo's squash-message setting, so
-      # a token written on an earlier commit can vanish and drop a minor bump
-      # back to a patch. Rebase puts each commit on main verbatim.
+      # picks the version bump by scanning `#minor`/`#major` across the SUBJECT
+      # of every commit in the push — subjects only, deliberately, so that
+      # prose about versioning in a body cannot cut a release. A squash
+      # collapses N subjects into one, so a token carried by an earlier commit
+      # is lost and a minor bump silently lands as a patch. Rebase replays each
+      # commit onto main with its subject intact.
       merge-method: rebase
       # The branch is what a caller pins when e2e-testing an unreleased change
       # (`@feature/<name>`), and it is the only copy of that ref. Keep it;

@@ -32,9 +32,26 @@ name: Tag release
 #
 #   So: don't write these tokens verbatim in a SUBJECT unless you mean them.
 #   Bodies are safe.
+#
+# Why there are two triggers. `push` is the real one. But a PR merged by
+# pr-merge.yml is merged with the default GITHUB_TOKEN, and GitHub does not
+# create workflow runs from events raised by that token — so a bot merge lands
+# on main and fires NO push event, cutting no tag and leaving `v4` behind,
+# silently. That suppression is a property of the token, not of the trigger:
+# `pull_request: [closed]` is silenced in exactly the same way, so there is no
+# "any merge into main" event to listen for instead. `workflow_run` is the one
+# thing that still fires, because it is raised by the triggering run's own
+# lifecycle rather than by the token's action.
+#
+# It therefore fires on completions that merged nothing — a skipped
+# trusted-trigger gate, a non-approving review. The head-already-tagged guard
+# below makes those a clean no-op rather than a spurious release.
 on:
   push:
     branches: [main]
+  workflow_run:
+    workflows: ["PR merge on approval"]
+    types: [completed]
 
 permissions:
   contents: write
@@ -45,6 +62,12 @@ concurrency: tag-release
 
 jobs:
   tag:
+    # A failed or cancelled merge run left main untouched; only a successful
+    # one can have added the commits this would tag. `push` carries no
+    # workflow_run object, so the first clause is what lets it through.
+    if: >-
+      github.event_name == 'push' ||
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -72,12 +95,31 @@ jobs:
           latest=${latest:-0.0.0}
           IFS=. read -r major minor patch <<<"$latest"
 
+          # Commit the last release points at. Empty on a repo with no tags yet.
+          released=$(git rev-list -n1 "v${latest}" 2>/dev/null || true)
+
+          # The workflow_run trigger fires on every completion of the merge
+          # workflow, including ones that merged nothing — a skipped
+          # trusted-trigger gate, a review that was not an approval. If the
+          # head is already what the last release tagged, there is nothing new
+          # on main, so skip instead of cutting a version for no change.
+          if [ -n "$released" ] && [ "$released" = "$GITHUB_SHA" ]; then
+            echo "v${latest} already points at ${GITHUB_SHA} — nothing new on main to release."
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           # Manual override token in ANY commit of THIS push (fixed-string match).
           # One push of N commits fires one run, at the head SHA — so reading
           # only HEAD drops a token carried by an earlier commit in the batch.
-          # Falls back to HEAD when the range is unusable: a first push to a new
-          # branch (`before` is all-zeros), a force-push that orphaned the old
-          # commit, or a re-run after history was rewritten.
+          # `before` is unusable on a workflow_run (the event carries no push
+          # range at all), a first push to a new branch (all-zeros), a
+          # force-push that orphaned the old commit, or a re-run after history
+          # was rewritten. Fall back to everything since the last RELEASE
+          # rather than to HEAD alone: HEAD-only silently drops a token carried
+          # by an earlier commit, which is the exact bug the paragraph above
+          # says was already fixed once. Tag-to-head is if anything a wider net
+          # than the push range, and nothing between them has been released.
           # SUBJECTS ONLY (%s, not %s%n%b). Scanning bodies too looks harmless
           # and is not: a commit whose body *explains* a version bump — "this
           # dropped the #minor and released it as a patch" — matches itself and
@@ -88,9 +130,12 @@ jobs:
              && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
             msg=$(git log --format='%s' "${BEFORE}..${GITHUB_SHA}")
             echo "Scanning $(git rev-list --count "${BEFORE}..${GITHUB_SHA}") commit subject(s) in this push for a bump token."
+          elif [ -n "$released" ]; then
+            msg=$(git log --format='%s' "${released}..${GITHUB_SHA}")
+            echo "No usable push range; scanning $(git rev-list --count "${released}..${GITHUB_SHA}") commit subject(s) since v${latest}."
           else
             msg=$(git log -1 --format='%s' HEAD)
-            echo "No usable push range; scanning HEAD's subject only."
+            echo "No usable push range and no prior release tag; scanning HEAD's subject only."
           fi
           if   printf '%s' "$msg" | grep -Fq '#major'; then bump=major
           elif printf '%s' "$msg" | grep -Fq '#minor'; then bump=minor
@@ -122,6 +167,9 @@ jobs:
           echo "Next version: v${major}.${minor}.${patch} (floating tag v${major})"
 
       - name: Create and push tags
+        # Empty when the step above found main already released — a
+        # workflow_run completion that merged nothing.
+        if: steps.ver.outputs.tag != ''
         env:
           TAG: ${{ steps.ver.outputs.tag }}
           MAJOR: ${{ steps.ver.outputs.major }}
