@@ -32,10 +32,14 @@ Consequences a change here is most likely to get wrong:
   returns before the merge, so the run completes — raising `workflow_run` —
   while `main` is still the pre-merge commit; tag-release then sees the head
   already tagged, exits clean, and the commit is stranded untagged for good.
-- **The shim's own `if:` must gate on state and draft**, duplicating what
-  `merge-on-approval.yml` checks internally. A run whose only job SKIPPED
-  still concludes `success` and still raises `workflow_run`, so without those
-  the tagger wakes on every review.
+- **`tag-release.yml`'s guard on `workflow_run.conclusion == 'success'` is
+  the load-bearing one.** `types: [completed]` delivers every conclusion, and
+  a run whose only job is filtered out concludes `skipped` (measured: runs
+  34702777640, 34702294904) — the conclusion test is what drops it. The
+  shim's own `if:` on state and draft duplicates what `merge-on-approval.yml`
+  checks internally; keep it, because it stops pointless runs and keeps the
+  intent next to the trigger, but do not mistake it for the thing preventing
+  a `changes_requested` review from cutting a release.
 - **`pr-merge.yml` pins `@v4`, which always lags this branch by one release.**
   A `uses:` job validates its inputs against the PINNED ref, not against the
   PR. So a PR that adds an input to a reusable workflow *and* passes it from

@@ -51,17 +51,22 @@ jobs:
     #
     # The state test is NOT redundant with merge-on-approval.yml's own. That
     # one decides whether to MERGE; this one decides whether this workflow
-    # RUNS at all — and tag-release.yml keys off this run completing. Without
-    # it, every review the agent posts (four `changes_requested` on this PR
-    # alone) starts a run named "PR merge on approval" whose inner job skips,
-    # which still concludes success and still raises `workflow_run`. Tagging
-    # would wake on essentially every review, and the stranded-commit warning
-    # would fire so routinely it would stop meaning anything.
-    # `draft` is tested here for the same reason as the state: the DRAFT
-    # filter lives in merge-on-approval.yml's inner job, so an approving
-    # review on a draft would pass this gate, skip the inner job, and still
-    # complete a run — waking tag-release and firing its stranded-commit
-    # warning with nothing merged. That warning is worth only its rarity.
+    # RUNS at all. Without it, every review the agent posts (four
+    # `changes_requested` on this PR alone) starts a run named "PR merge on
+    # approval" whose inner job skips.
+    #
+    # Such a run concludes `skipped`, not `success` — measured on runs
+    # 34702777640 and 34702294904 — and tag-release.yml's
+    # `conclusion == 'success'` guard is what drops it. So this gate is NOT
+    # the barrier between a `changes_requested` review and a release; that
+    # guard is. What this buys is the pointless runs never existing, and the
+    # trigger's intent staying readable next to the trigger.
+    #
+    # `draft` is tested here for the same reason: the DRAFT filter lives in
+    # merge-on-approval.yml's inner job, so an approving review on a draft
+    # would pass this gate and skip the inner job — a `skipped` run that
+    # tag-release drops. Testing it here keeps both conditions in one place
+    # rather than split across two files.
     if: >-
       github.event.review.state == 'approved' &&
       github.event.pull_request.draft == false &&
