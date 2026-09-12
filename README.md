@@ -194,10 +194,10 @@ regression, or `10021`, finally shows up.
 
 `dry-run: true` stops this workflow after the budget gate: install, build,
 `wrangler deploy --dry-run`, report the gzip size, apply `max-gzip-kib`, and
-upload nothing. Everything that touches a live Worker is skipped — the deploy,
-runtime secrets, the secrets-landed check, the startup gate, the cron check
-and the verify probe — so the same call that deploys on `main` can gate a PR
-with the thresholds changed to nothing else:
+upload nothing. Everything that reaches outside the runner is skipped — the
+deploy, runtime secrets, the secrets-landed check, `pre-deploy-command`, the
+startup gate, the cron check and the verify probe — so the same inputs that
+deploy on `main` gate a PR with only the thresholds to think about:
 
 ```yaml
 bundle-api:
@@ -213,6 +213,14 @@ bundle-api:
 
 **Pass no Cloudflare credentials to it.** A dry run authenticates to nothing,
 and a pull-request job is the last place to expose a deploy token.
+
+**Two things a copied deploy job brings with it that this input cannot switch
+off.** `environment:` is a property of the *calling* job, not of these inputs,
+so a dry run copied from a job that names a production environment queues
+against that environment's protection rules and sits waiting for a reviewer on
+every pull request — drop the key. And `pre-deploy-command`, though it is
+skipped under `dry-run`, is worth deleting from the copy anyway: leaving it in
+records an intention the job does not carry out.
 
 The gate it *cannot* stand in for is `max-startup-ms`: only a real upload
 measures startup time, so that number stays post-deploy and a green dry run is

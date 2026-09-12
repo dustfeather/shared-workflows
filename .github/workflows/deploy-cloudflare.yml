@@ -77,6 +77,10 @@ on:
           Shell command run in `working-dir` after the build and before the
           deploy — database migrations, publishing reference data, anything the
           new code expects to already exist. Empty (the default) skips it.
+
+          It writes to live D1/KV, so `dry-run: true` skips it as well. A
+          pull-request caller measuring a bundle wants nothing from it and
+          should leave it unset.
         type: string
         default: ""
       deploy-command:
@@ -102,12 +106,15 @@ on:
           is still reachable from a green PR. Half the budget checked early is
           the half that catches a dependency doubling in size.
 
-          Everything that talks to a live Worker is skipped: the deploy itself,
-          the runtime secrets, the secrets-landed check, the startup gate, the
-          cron check and the verify probe. `CLOUDFLARE_API_TOKEN` and
-          `CLOUDFLARE_ACCOUNT_ID` are not needed and should not be passed — a
-          dry run authenticates to nothing, and a pull-request job is the last
-          place to hand out a deploy credential.
+          Everything that reaches outside the runner is skipped: the deploy
+          itself, the runtime secrets, the secrets-landed check, the startup
+          gate, the cron check, the verify probe — and `pre-deploy-command`,
+          which does not touch the Worker but does apply migrations and write
+          reference data against live D1 and KV. A caller that copies a deploy
+          job wholesale therefore does not mutate production on a pull request.
+          `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are not needed and
+          should not be passed — a dry run authenticates to nothing, and a
+          pull-request job is the last place to hand out a deploy credential.
         type: boolean
         default: false
       max-gzip-kib:
@@ -375,7 +382,15 @@ jobs:
           set -eu
           sh -c "$BUILD_COMMAND"
 
-      - if: inputs.pre-deploy-command != ''
+      # `!inputs.dry-run` is not tidiness: this step is documented as the
+      # migrations and reference-data hook, so a caller's real value for it is
+      # something like `wrangler d1 migrations apply <db> --remote`. Copying a
+      # deploy job into a pull-request job — which is exactly what the README
+      # invites — would then run production migrations on every push to every
+      # PR branch, and with the Cloudflare credentials correctly withheld it
+      # would instead die on a wrangler auth error partway through. Neither is
+      # a dry run.
+      - if: ${{ !inputs.dry-run && inputs.pre-deploy-command != '' }}
         name: Pre-deploy (migrations, reference data)
         working-directory: ${{ inputs.working-dir }}
         env:
@@ -475,7 +490,11 @@ jobs:
           set -eu
           shred -u "$WORKER_SECRETS_FILE" 2>/dev/null || rm -f "$WORKER_SECRETS_FILE"
 
-      - if: env.WORKER_SECRET_NAMES != ''
+      # Under `dry-run` this already skips because nothing staged the secrets
+      # and `WORKER_SECRET_NAMES` is therefore unset — but that is a transitive
+      # skip a reader has to reconstruct. Saying it makes `!inputs.dry-run` the
+      # one thing to grep for to see what a dry run does not do.
+      - if: ${{ !inputs.dry-run && env.WORKER_SECRET_NAMES != '' }}
         name: Confirm the secrets landed on the Worker
         working-directory: ${{ inputs.working-dir }}
         run: |
