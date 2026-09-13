@@ -182,6 +182,14 @@ jobs:
           # run's own permission group, and issue #149 got NO `closed` timeline
           # event at all — not a rejected close, no close attempted.
           #
+          # That is the PR-BODY path. There is a SECOND, independent closer:
+          # a push-time scan of each commit message landing on the default
+          # branch, which is NOT suppressed for a bot merge. So on a caller
+          # using `merge-method: rebase`, a commit body carrying `Closes #N`
+          # can close the issue before this block runs. That is why the read
+          # below filters to `state == "OPEN"` — a logged no-op, not a double
+          # close. Evidence for both paths is in merge-on-approval.yml.
+          #
           # Ported from merge-on-approval.yml, which reasoned all of this out
           # first. Kept as a port rather than a rewrite: the edge cases below
           # (pagination truncation, cross-repo targets, re-close no-ops,

@@ -221,22 +221,42 @@ jobs:
           # commit_id was a direct human push whose own commit message carried
           # the keyword — never a bot merge.
           #
-          # CONTRADICTED, and not yet explained. On dustfeather/shared-workflows
-          # PR #37 (2026-09-13) the linked issue #35 DID close on a GITHUB_TOKEN
-          # merge: closedAt equal to the merge instant, stateReason COMPLETED,
-          # and no comment — so not this block, which provably never ran on that
-          # merge (the state read below was broken, see its comment). Something
-          # outside this workflow closed it, and GitHub's own keyword handling is
-          # the only candidate.
+          # RESOLVED, 2026-09-13 — the apparent counter-example turned out to
+          # be a DIFFERENT mechanism, and the rule above stands unchanged.
           #
-          # Two measurements, opposite results, mechanism unknown. Candidate
-          # differences not yet tested: merge method (rebase here, squash on
-          # fleet-manager), repo visibility, or a platform change between the
-          # two dates. Until that is settled this block STAYS: it is idempotent
-          # by construction — the read below filters to state == OPEN, so if
-          # GitHub already closed the issue there is nothing to close and the
-          # log says so. Belt and braces costs one API call; assuming the wrong
-          # one of two contradictory measurements costs a silently open issue.
+          # On dustfeather/shared-workflows PR #37 the linked issue #35 DID
+          # close on a GITHUB_TOKEN merge, which read like a contradiction of
+          # everything above. It is not one. GitHub has TWO independent
+          # closers:
+          #
+          #   1. PR-merge-time, driven by `closingIssuesReferences` computed
+          #      from the PR BODY. This is the one suppressed for a merge
+          #      performed with GITHUB_TOKEN, scope or no scope.
+          #   2. A push-time scan of each COMMIT MESSAGE landing on the default
+          #      branch, tied to no PR at all.
+          #
+          # #35 was closed by (2). Commit 7f70879 ends with `Closes #35` in its
+          # own body; `merge-method: rebase` replays branch commits onto main
+          # verbatim rather than synthesising a message; and #35's `closed`
+          # event carries commit_id 7f70879 — NOT PR #37's merge commit
+          # 73bfd19. The control is PR #39: body `Fixes #38.`, commit body
+          # carrying no keyword, `closingIssuesReferences` registering #38
+          # correctly — and #38 has no `closed` event at all. Same actor, same
+          # token, same merge path, same day. The only difference is whether a
+          # COMMIT MESSAGE carried the keyword.
+          #
+          # Those raw facts are read straight from the API. The two-mechanism
+          # reading of them is inference, not something GitHub documents — but
+          # it explains both measurements and nothing else does.
+          #
+          # Two consequences for this block:
+          #   - Path (1) is genuinely dead for us, so this block is
+          #     load-bearing, not belt and braces. A PR whose keyword lives
+          #     only in the description closes nothing without it.
+          #   - Path (2) can close the issue BEFORE this block runs, on any
+          #     caller merging by rebase with a keyword-carrying commit. The
+          #     read below filters to state == OPEN, so that is a logged no-op
+          #     rather than a double close.
           #
           # `direct` only. On the `--auto` path gh hands the merge to GitHub
           # and returns immediately, so nothing has merged yet and there is
