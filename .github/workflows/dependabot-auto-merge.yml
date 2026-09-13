@@ -51,6 +51,24 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      # Without this, a merged `Closes #N` links but never closes. GitHub
+      # computes `closingIssuesReferences` for free at PR open; EXECUTING the
+      # close at merge is a separate write to the Issues API, attributed to
+      # whoever performed the merge — here, GITHUB_TOKEN in the step below.
+      # Lacking the scope, the merge still succeeds, the link is still stored,
+      # and the close silently does not happen: no warning, no annotation,
+      # green run. Measured on ITGuys-RO/fleet-manager PR #151.
+      #
+      # NOTE FOR ANY FUTURE SCOPE ADDED HERE: a called workflow may not request
+      # more GITHUB_TOKEN permission than the calling job grants, and
+      # `permissions:` takes no expressions, so the scope cannot be
+      # conditional. Adding one here before every caller grants it turns each
+      # of those callers into a startup_failure — zero jobs, empty
+      # `--log-failed`, no annotation, in repos nobody touched. Callers first,
+      # then this file, then the tag. That ordering is why this arrives as a
+      # minor and not a major: by the time it ships, no live caller is missing
+      # it, so every shim keeps working untouched.
+      issues: write
     steps:
       - name: Merge
         env:
@@ -58,6 +76,16 @@ jobs:
           REPO: ${{ github.repository }}
           MODE: ${{ inputs.mode }}
           MERGE_METHOD_INPUT: ${{ inputs.merge-method }}
+          EVENT_NAME: ${{ github.event_name }}
+          # Passed through the environment, never interpolated into the script
+          # body. `${{ }}` splices its value in as SOURCE TEXT before bash ever
+          # parses the line, so a branch named with shell metacharacters would
+          # execute. The trusted-trigger gate above constrains the ACTOR to
+          # dependabot[bot]; it says nothing about the branch NAME, and a
+          # trigger gate is not an escaping strategy.
+          WORKFLOW_RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          EVENT_PR_URL: ${{ github.event.pull_request.html_url }}
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           # Strictness stated, not assumed. A `run:` step with no `shell:`
           # is executed as `bash -e {0}`, so `-e` is already on — GitHub's
@@ -86,22 +114,227 @@ jobs:
           fi
           echo "Merge method: $method"
 
-          # Resolve PR URL based on trigger event
-          if [ "${{ github.event_name }}" = "workflow_run" ]; then
-            BRANCH="${{ github.event.workflow_run.head_branch }}"
-            PR_URL=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url --jq '.[0].url // empty')
-            if [ -z "$PR_URL" ]; then
-              echo "No open PR for branch $BRANCH; nothing to merge"
+          # Resolve the PR from the trigger event. Both the URL and the NUMBER,
+          # in one read: the close block below keys off the number, and
+          # re-deriving it by chopping the URL would make the same fact have
+          # two sources that can disagree.
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            pr=$(gh pr list --repo "$REPO" --head "$WORKFLOW_RUN_BRANCH" --state open \
+                   --json url,number --jq '.[0] // empty | "\(.url) \(.number)"')
+            if [ -z "$pr" ]; then
+              echo "No open PR for branch $WORKFLOW_RUN_BRANCH; nothing to merge"
               exit 0
             fi
+            PR_URL=${pr%% *}
+            PR_NUMBER=${pr##* }
           else
-            PR_URL="${{ github.event.pull_request.html_url }}"
+            PR_URL="$EVENT_PR_URL"
+            PR_NUMBER="$EVENT_PR_NUMBER"
           fi
           echo "PR: $PR_URL"
 
-          # Merge
+          # `direct` captures the status instead of letting `set -e` act on it.
+          # This command can exit nonzero AFTER the merge has already landed —
+          # `--delete-branch` failing on a protected or already-deleted branch
+          # is the obvious way. Under `set -e` that kills the step before the
+          # close block below, so an irreversible merge would leave its linked
+          # issues neither closed NOR annotated: a silent miss, which is the
+          # one outcome this block exists to make impossible.
+          #
+          # Nothing is assumed about what the status means. The merged-state
+          # read below is what adjudicates. A nonzero status just gets said out
+          # loud so the log shows it alongside whatever that read concludes.
+          #
+          # `auto` stays bare. There the merge has NOT happened — gh hands it
+          # to GitHub and returns — so a nonzero exit means auto-merge was not
+          # enabled, nothing landed, and there is nothing to strand. Failing is
+          # the correct outcome on that path.
+          merge_rc=0
           if [ "$MODE" = "direct" ]; then
-            gh pr merge "$PR_URL" "$method" --delete-branch
+            gh pr merge "$PR_URL" "$method" --delete-branch || merge_rc=$?
+            if [ "$merge_rc" -ne 0 ]; then
+              echo "::error::gh pr merge exited ${merge_rc} for $PR_URL. It may still have merged — the branch deletion can fail after the merge lands. See the merge state reported below; do not assume this means nothing merged."
+            fi
           else
             gh pr merge --auto "$method" "$PR_URL"
+          fi
+
+          # --- Close the PR's linked issues ourselves ----------------------
+          # GitHub does NOT execute closing-keyword handling for a merge
+          # performed with GITHUB_TOKEN. It still COMPUTES the link — but it
+          # never runs the close. Measured on ITGuys-RO/fleet-manager, PR #151,
+          # 2026-09-13: `closingIssuesReferences` returned `[{"number":149}]`
+          # both before and after a clean bot merge with `Issues: write` in the
+          # run's own permission group, and issue #149 got NO `closed` timeline
+          # event at all — not a rejected close, no close attempted.
+          #
+          # Ported from merge-on-approval.yml, which reasoned all of this out
+          # first. Kept as a port rather than a rewrite: the edge cases below
+          # (pagination truncation, cross-repo targets, re-close no-ops,
+          # ambiguous merge-state reads) are each there for a measured reason.
+          #
+          # Dependabot PR bodies essentially never carry `Closes #N`, so the
+          # live blast radius of this gap was small — but a caller can add body
+          # text to a Dependabot PR, and "small" is not "none".
+          #
+          # `direct` only. On the `--auto` path gh hands the merge to GitHub and
+          # returns immediately, so nothing has merged yet and there is nothing
+          # to close.
+          if [ "$MODE" != "direct" ]; then
+            echo "Mode is '$MODE', not 'direct': the merge is deferred to GitHub, so this run has nothing merged yet and closes no linked issues. See the \`mode\` input description."
+          fi
+
+          if [ "$MODE" = "direct" ]; then
+            # Read the state into a variable rather than testing the
+            # substitution inline. Command substitution inside an `if`
+            # condition is EXEMPT from `set -e`, so a failed `gh pr view`
+            # collapses to "" — which is != "true" — and an inline test cannot
+            # tell "the PR is not merged" from "I could not find out". Those
+            # are different facts and get different annotations here.
+            if ! merged=$(gh pr view "$PR_URL" --json merged --jq .merged); then
+              echo "::error::Could not read the merge state of $PR_URL (merge command exited ${merge_rc}). Verify it and close any linked issues by hand."
+              merged=unknown
+            fi
+
+            if [ "$merged" = "false" ]; then
+              echo "::error::The PR reports not merged (merge command exited ${merge_rc}). No issues closed; check the run and the branch state by hand."
+
+              # Exit nonzero ONLY when both signals agree that nothing landed.
+              # If gh exited 0 while the PR reads as not-merged the two
+              # disagree, either could be the liar, and the merge may well have
+              # happened — so that stays an annotation on a green run. When gh
+              # ALSO exited nonzero they agree on the one fact that makes
+              # failing safe: no merge commit exists, so there is nothing to
+              # strand and a red run is the correct, visible outcome.
+              if [ "$merge_rc" -ne 0 ]; then
+                exit 1
+              fi
+            fi
+
+            if [ "$merged" != "true" ] && [ "$merged" != "false" ] && [ "$merged" != "unknown" ]; then
+              # A value this script did not anticipate. Saying so is the point:
+              # a skipped close that logs nothing is the silent no-op being
+              # removed here. `unknown` is excluded because THIS SCRIPT sets it,
+              # on the read failure above, which already emitted its own error —
+              # without the exclusion one failed read produces two annotations,
+              # the second reporting a state nothing outside this file produces.
+              echo "::error::Unexpected merge state '${merged}' for $PR_URL. Linked issues were NOT closed; verify the merge and close them by hand."
+            fi
+          fi
+
+          if [ "$MODE" = "direct" ] && [ "${merged:-}" = "true" ]; then
+
+            # Each node carries its OWN repository. A closing keyword may be
+            # cross-repo (`Closes org/other#5`), so closing against "$REPO"
+            # would not merely 404 — where that number exists here too, it
+            # would close an unrelated issue in the wrong repo. GITHUB_TOKEN is
+            # scoped to the issuing repo, so a genuinely cross-repo close will
+            # still 403 or 404; targeting the right repo turns "silently closed
+            # the WRONG issue" into a per-issue annotation naming the one that
+            # needs a hand.
+            #
+            # Filter to OPEN. Re-closing a closed issue is not a no-op: it
+            # overwrites stateReason and adds timeline noise, so a re-run would
+            # rewrite history it did not create.
+            #
+            # A bounded read truncates SILENTLY, which would put a hole in the
+            # one invariant this block keeps — that a missed close is always
+            # annotated. So ask for totalCount and emit it as the first line,
+            # then the OPEN pairs. One call, and no dependency on a `jq` binary
+            # existing on the runner: `gh --jq` is gh's own.
+            #
+            # `read_failed` is initialised before the read: `set -u` is on, and
+            # it is read on a path the read failure does not take.
+            read_failed=""
+            # One name for the page size, used by the query and the guard
+            # below. As two literals, raising the query alone would make the
+            # guard fire at PAGE+1 and annotate "close them by hand" for issues
+            # this step had just closed — a false alarm in the one block whose
+            # whole point is that its annotations can be trusted.
+            PAGE=50
+            if ! refs=$(gh api graphql -f query='
+              query($owner:String!,$name:String!,$number:Int!,$page:Int!){
+                repository(owner:$owner,name:$name){
+                  pullRequest(number:$number){
+                    closingIssuesReferences(first:$page){
+                      totalCount
+                      nodes { number state repository { nameWithOwner } }
+                    }
+                  } } }' \
+              -f owner="${REPO%%/*}" -f name="${REPO##*/}" -F number="$PR_NUMBER" \
+              -F page="$PAGE" \
+              --jq '.data.repository.pullRequest.closingIssuesReferences
+                    | "\(.totalCount)",
+                      (.nodes[] | select(.state == "OPEN")
+                       | "\(.repository.nameWithOwner) \(.number)")')
+            then
+              # Same rule as every other post-merge command here: a transient
+              # 502 or a secondary rate limit must not fail the run.
+              echo "::error::Could not read the linked issues for #${PR_NUMBER}; close them by hand."
+              refs=""
+              read_failed=1
+            fi
+
+            # `read`, not `head -n 1`. `pipefail` is on, and `head` exits as
+            # soon as it has its line without draining the pipe, so a `refs`
+            # bigger than the 64K pipe buffer gives `printf` SIGPIPE, status
+            # 141, and `set -e` kills the step — an exit after an irreversible
+            # merge, which is the one thing this block is built not to do.
+            # A herestring always supplies the trailing newline, so `read`
+            # returns 0 and does not trip `set -e`. `tail -n +2` cannot
+            # SIGPIPE: emitting from line 2 means reading the whole stream.
+            IFS= read -r total <<< "$refs"
+            linked=$(printf '%s\n' "$refs" | tail -n +2)
+
+            if [ -n "$total" ] && [ "$total" -gt "$PAGE" ]; then
+              echo "::error::PR #${PR_NUMBER} links ${total} issues but only the first ${PAGE} were read. Any beyond ${PAGE} were NOT closed; close them by hand."
+            fi
+
+            # Three outcomes, not two. `refs=""` on a failed read makes `linked`
+            # empty for the same reason a PR with no linked issues does, and
+            # collapsing them would print "No open linked issues to close." as
+            # fact directly beneath the error saying the read failed. "I could
+            # not find out" and "there is nothing there" are different facts.
+            #
+            # A flag rather than testing `[ -z "$total" ]`: that would work
+            # today, but it silently depends on totalCount staying the FIRST
+            # line of the jq expression, and nothing would fail if a later edit
+            # reordered it.
+            if [ -n "$read_failed" ]; then
+              echo "Linked issues for #${PR_NUMBER} are UNKNOWN: the read above failed. Nothing was closed; see the error annotation."
+            elif [ -z "$linked" ]; then
+              echo "No open linked issues to close."
+            else
+              # NEVER let a failed close fail this step. By this point the merge
+              # has ALREADY landed and cannot be undone. Exiting nonzero because
+              # one issue was locked, transferred, or hit a transient API error
+              # buys nothing and costs the signal. `::error::` rather than
+              # `::warning::` so a miss shows as a red annotation on an
+              # otherwise green run — an annotation does not change the job
+              # conclusion, so this buys visibility, not a red run.
+              while read -r issue_repo issue; do
+                # The one place here that could skip without saying so, in a
+                # block whose whole thesis is that a close which does not happen
+                # is always annotated. Unreachable today — `nameWithOwner` is
+                # never empty — but "unreachable" is why it would stay silent if
+                # it ever happened.
+                if [ -z "$issue" ]; then
+                  echo "::error::Malformed linked-issue row for #${PR_NUMBER}: '${issue_repo}'. Close any remaining linked issues by hand."
+                  continue
+                fi
+                # `completed`, explicitly. The default reason reads as
+                # abandoned, which is wrong for work that just shipped.
+                # `</dev/null` because this loop's stdin is the herestring that
+                # `read` is consuming: a future flag that DID read stdin would
+                # swallow the rest of the list and skip every issue after the
+                # first, with no annotation.
+                if gh issue close "$issue" --repo "$issue_repo" --reason completed \
+                     --comment "Closed by ${REPO}#${PR_NUMBER} on merge." </dev/null
+                then
+                  echo "Closed ${issue_repo}#${issue}, linked by #${PR_NUMBER}"
+                else
+                  echo "::error::Could not close ${issue_repo}#${issue}, linked by #${PR_NUMBER}. The merge succeeded; close this issue by hand."
+                fi
+              done <<< "$linked"
+            fi
           fi
