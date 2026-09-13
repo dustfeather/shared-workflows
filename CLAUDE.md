@@ -50,6 +50,19 @@ Consequences a change here is most likely to get wrong:
   worse than "lags by one": `tag-release.yml` re-points only the CURRENT major,
   so the v5 cut froze v4 at v4.14.2 and the shim stopped receiving releases
   entirely. On the current major the lag self-heals at the next tag.
+- **`pr-checks.yml` names ITSELF in its own `paths-ignore`.** A PR whose only
+  changed file is `.github/workflows/pr-checks.yml` changes a non-empty set of
+  files, every one of them excluded, so GitHub creates **no run object** — not a
+  skipped run, absent. No run means no review; no review means no approval; and
+  `pr-merge.yml` triggers on `pull_request_review`. So such a PR cannot land
+  itself, nothing goes red, and it sits waiting for CI that will never be
+  scheduled. Push that file straight to `main` (that is how the `@v4`→`@v5` pin
+  bump shipped), or bundle it with a change to another path. Editing it inside a
+  larger PR has a second, unrelated failure: `claude-code-action` rejects its
+  OIDC exchange when the PR edits the workflow that triggered the run, then
+  swallows the 401 and exits 0 — the review silently no-ops while the check
+  stays green.
+
 - **`#major` behaves asymmetrically by path.** On a real push range, a
   `#major` not on the head subject is a hard `exit 1`. On the `workflow_run`
   path there is no push range, so the scan spans last-release-tag..HEAD and
