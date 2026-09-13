@@ -179,7 +179,7 @@ Cross-org rollout — shared workflow at `dustfeather/shared-workflows`, caller 
    ```yaml
    jobs:
      review:
-       uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v4
+       uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v5
        with:
          path-to-bun: /usr/local/bin/bun
          path-to-claude: /usr/local/bin/claude

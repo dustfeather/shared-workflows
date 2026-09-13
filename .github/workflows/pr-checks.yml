@@ -21,7 +21,19 @@ jobs:
       pull-requests: write
       issues: read
       id-token: write
-    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v4
+    # `@v5`, floating, matching pr-merge.yml. `@v4` is FROZEN at v4.14.2 —
+    # tag-release.yml re-points only the CURRENT major, so the v5 cut stranded
+    # it — and a pin left there can never receive another change to
+    # claude-code-review.yml. That was invisible because the file is
+    # byte-identical between `v4` and `main` (verified 2026-09-13, empty
+    # `git diff v4 main`): latent drift, not live breakage, and it would have
+    # stayed invisible until the first real change to the review workflow.
+    #
+    # This bump could not be shipped as a PR. `paths-ignore` above excludes
+    # this very file, so a PR touching ONLY it starts no "PR checks" run at
+    # all — no review, therefore no approval, therefore pr-merge.yml never
+    # fires and the PR cannot land itself. Landed directly on main instead.
+    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v5
     with:
       runner: arc-df-shared-workflows
     secrets:
