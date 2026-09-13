@@ -270,7 +270,7 @@ jobs:
             # Filter to OPEN. Re-closing a closed issue is not a no-op: it
             # overwrites stateReason and adds timeline noise, so a re-run would
             # rewrite history it did not create.
-            # `first: 50` truncates SILENTLY, which would put a hole in the
+            # A bounded read truncates SILENTLY, which would put a hole in the
             # one invariant this block keeps — that a missed close is always
             # annotated. So ask for totalCount and emit it as the first line,
             # then the OPEN pairs. One call, and no dependency on a `jq` binary
@@ -278,16 +278,24 @@ jobs:
             # Initialised before the read: `set -u` is on, and this is read
             # on a path the read failure does not take.
             read_failed=""
+            # One name for the page size. It was a literal `50` in the query
+            # and again in the guard below, 37 lines apart with nothing tying
+            # them together: raising the query alone would make the guard fire
+            # at 51 and annotate "close them by hand" for issues this step had
+            # just closed — a false alarm in the one block whose whole point is
+            # that its annotations can be trusted.
+            PAGE=50
             if ! refs=$(gh api graphql -f query='
-              query($owner:String!,$name:String!,$number:Int!){
+              query($owner:String!,$name:String!,$number:Int!,$page:Int!){
                 repository(owner:$owner,name:$name){
                   pullRequest(number:$number){
-                    closingIssuesReferences(first:50){
+                    closingIssuesReferences(first:$page){
                       totalCount
                       nodes { number state repository { nameWithOwner } }
                     }
                   } } }' \
               -f owner="${REPO%%/*}" -f name="${REPO##*/}" -F number="$PR_NUMBER" \
+              -F page="$PAGE" \
               --jq '.data.repository.pullRequest.closingIssuesReferences
                     | "\(.totalCount)",
                       (.nodes[] | select(.state == "OPEN")
@@ -305,7 +313,8 @@ jobs:
             # bigger than the 64K pipe buffer gives `printf` SIGPIPE, status
             # 141, and `set -e` kills the step — an exit after an irreversible
             # merge, which is the one thing this whole block is built not to do.
-            # Unreachable at `first: 50` (worst case ~7.5K against a 64K buffer,
+            # Unreachable at the page size above (worst case ~7.5K per 50 rows
+            # against a 64K buffer,
             # and MEASURED to survive 500 lines / 33K), but the invariant should
             # not be a consequence of a page size set 20 lines away.
             #
@@ -319,8 +328,8 @@ jobs:
             IFS= read -r total <<< "$refs"
             linked=$(printf '%s\n' "$refs" | tail -n +2)
 
-            if [ -n "$total" ] && [ "$total" -gt 50 ]; then
-              echo "::error::PR #${PR_NUMBER} links ${total} issues but only the first 50 were read. Any beyond 50 were NOT closed; close them by hand."
+            if [ -n "$total" ] && [ "$total" -gt "$PAGE" ]; then
+              echo "::error::PR #${PR_NUMBER} links ${total} issues but only the first ${PAGE} were read. Any beyond ${PAGE} were NOT closed; close them by hand."
             fi
 
             # Three outcomes, not two. `refs=""` on a failed read makes `linked`
