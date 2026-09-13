@@ -239,10 +239,17 @@ jobs:
             fi
           fi
 
-          if [ "$MODE" = "direct" ] && [ "${merged:-}" != "true" ] && [ "${merged:-}" != "false" ]; then
-            # Neither true nor false, and we did not exit above. Saying so is
-            # the whole point of this change: a skipped close that logs nothing
-            # is the silent no-op being removed here.
+          if [ "$MODE" = "direct" ] && [ "${merged:-}" != "true" ] \
+             && [ "${merged:-}" != "false" ] && [ "${merged:-}" != "unknown" ]; then
+            # A value this script did not anticipate. Saying so is the point: a
+            # skipped close that logs nothing is the silent no-op being removed
+            # here.
+            #
+            # `unknown` is excluded because THIS SCRIPT sets it, on the read
+            # failure just above, which already emitted its own ::error::.
+            # Without the exclusion one failed read produces two annotations,
+            # the second reporting an "unexpected" state that nothing outside
+            # this file can ever produce.
             echo "::error::Unexpected merge state '${merged:-}' for $PR_URL. Linked issues were NOT closed; verify the merge and close them by hand."
           fi
 
@@ -263,23 +270,37 @@ jobs:
             # Filter to OPEN. Re-closing a closed issue is not a no-op: it
             # overwrites stateReason and adds timeline noise, so a re-run would
             # rewrite history it did not create.
-            if ! linked=$(gh api graphql -f query='
+            # `first: 50` truncates SILENTLY, which would put a hole in the
+            # one invariant this block keeps — that a missed close is always
+            # annotated. So ask for totalCount and emit it as the first line,
+            # then the OPEN pairs. One call, and no dependency on a `jq` binary
+            # existing on the runner: `gh --jq` is gh's own.
+            if ! refs=$(gh api graphql -f query='
               query($owner:String!,$name:String!,$number:Int!){
                 repository(owner:$owner,name:$name){
                   pullRequest(number:$number){
                     closingIssuesReferences(first:50){
+                      totalCount
                       nodes { number state repository { nameWithOwner } }
                     }
                   } } }' \
               -f owner="${REPO%%/*}" -f name="${REPO##*/}" -F number="$PR_NUMBER" \
-              --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[]
-                    | select(.state == "OPEN")
-                    | "\(.repository.nameWithOwner) \(.number)"')
+              --jq '.data.repository.pullRequest.closingIssuesReferences
+                    | "\(.totalCount)",
+                      (.nodes[] | select(.state == "OPEN")
+                       | "\(.repository.nameWithOwner) \(.number)")')
             then
               # Same rule as every other post-merge command here: a transient
               # 502 or a secondary rate limit must not fail the run.
               echo "::error::Could not read the linked issues for #${PR_NUMBER}; close them by hand."
-              linked=""
+              refs=""
+            fi
+
+            total=$(printf '%s\n' "$refs" | head -n 1)
+            linked=$(printf '%s\n' "$refs" | tail -n +2)
+
+            if [ -n "$total" ] && [ "$total" -gt 50 ]; then
+              echo "::error::PR #${PR_NUMBER} links ${total} issues but only the first 50 were read. Any beyond 50 were NOT closed; close them by hand."
             fi
 
             if [ -z "$linked" ]; then
