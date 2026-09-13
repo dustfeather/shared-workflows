@@ -40,14 +40,16 @@ Consequences a change here is most likely to get wrong:
   checks internally; keep it, because it stops pointless runs and keeps the
   intent next to the trigger, but do not mistake it for the thing preventing
   a `changes_requested` review from cutting a release.
-- **`pr-merge.yml` pins `@v4`, which always lags this branch by one release.**
-  A `uses:` job validates its inputs against the PINNED ref, not against the
-  PR. So a PR that adds an input to a reusable workflow *and* passes it from
-  this repo's own shim in the same commit fails with `Invalid input, <name> is
-  not defined in the referenced workflow` — `startup_failure`, the merge job
-  never starts, and the PR cannot land itself. Either merge that PR by hand,
-  or split it: ship the input, let `tag-release.yml` move `v4`, then add the
-  caller.
+- **`pr-merge.yml` pins `@v5`, which lags this branch by one release.**
+  A `uses:` job validates inputs against the PINNED ref, not the PR. So a PR
+  adding an input to a reusable workflow *and* passing it from this repo's own
+  shim in one commit fails `Invalid input, <name> is not defined in the
+  referenced workflow` — `startup_failure`, merge job never starts, PR cannot
+  land itself. Merge it by hand, or split: ship the input, let `tag-release.yml`
+  move `v5`, then add the caller. The pin was `@v4` until 2026-09-13, which was
+  worse than "lags by one": `tag-release.yml` re-points only the CURRENT major,
+  so the v5 cut froze v4 at v4.14.2 and the shim stopped receiving releases
+  entirely. On the current major the lag self-heals at the next tag.
 - **`#major` behaves asymmetrically by path.** On a real push range, a
   `#major` not on the head subject is a hard `exit 1`. On the `workflow_run`
   path there is no push range, so the scan spans last-release-tag..HEAD and
