@@ -172,8 +172,32 @@ jobs:
             echo "Merge pinned to reviewed head $MATCH_HEAD_COMMIT."
           fi
 
+          # `direct` captures the status instead of letting `set -e` act on it.
+          # This command can exit nonzero AFTER the merge has already landed —
+          # `--delete-branch` failing on a protected or already-deleted branch is
+          # the obvious way, and gh's exact exit behaviour there is NOT verified
+          # here. Under `set -e` that kills the step before any of the post-merge
+          # work below, which is the same unrecoverable outcome every comment
+          # down there is written to avoid: tag-release.yml only ever sees this
+          # job's `workflow_run`, so a failed step means the merge commit is
+          # never tagged and there is no retry path, and the linked issues are
+          # never closed and never annotated.
+          #
+          # Nothing is assumed about what the status means. The merged-state read
+          # below is what adjudicates, and it already distinguishes merged from
+          # not-merged from could-not-tell. A nonzero status just gets said out
+          # loud so the log shows it alongside whatever that read concludes.
+          #
+          # `auto` stays bare. There the merge has NOT happened — gh hands it to
+          # GitHub and returns — so a nonzero exit means auto-merge was not
+          # enabled, nothing landed, and there is no tag or close to strand.
+          # Failing is the correct outcome on that path.
+          merge_rc=0
           if [ "$MODE" = "direct" ]; then
-            gh pr merge "$PR_URL" "$method" $del $match
+            gh pr merge "$PR_URL" "$method" $del $match || merge_rc=$?
+            if [ "$merge_rc" -ne 0 ]; then
+              echo "::error::gh pr merge exited ${merge_rc} for $PR_URL. It may still have merged — the branch deletion can fail after the merge lands. See the merge state reported below; do not assume this means nothing merged."
+            fi
           else
             gh pr merge --auto "$method" "$PR_URL" $del $match
           fi
@@ -215,7 +239,7 @@ jobs:
             # Reporting the second when the first is true sends someone looking
             # for a failed merge that never failed.
             if ! merged=$(gh pr view "$PR_URL" --json merged --jq .merged); then
-              echo "::error::Could not read the merge state of $PR_URL. The merge command exited 0; verify it and close any linked issues by hand."
+              echo "::error::Could not read the merge state of $PR_URL (merge command exited ${merge_rc}). Verify it and close any linked issues by hand."
               merged=unknown
             fi
 
@@ -235,7 +259,7 @@ jobs:
             #
             # Exit 0 is better in both directions, so this is an annotation.
             if [ "$merged" = "false" ]; then
-              echo "::error::gh pr merge exited 0 but the PR reports not merged. No issues closed; check pr-merge.yml and the tag state by hand."
+              echo "::error::The PR reports not merged (merge command exited ${merge_rc}). No issues closed; check pr-merge.yml and the tag state by hand."
             fi
           fi
 
