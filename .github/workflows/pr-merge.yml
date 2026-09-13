@@ -75,6 +75,14 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      # Inert today, and deliberately granted anyway: the pin below is `@v4`,
+      # which never requested this scope. A caller may always grant MORE than
+      # the callee asks; the reverse is a `startup_failure` with zero jobs and
+      # an empty `--log-failed`. v5's merge-on-approval requires `issues: write`
+      # — without it a merged `Closes #N` stores the link and silently never
+      # closes — so whenever this pin moves to `@v5` the grant is already here.
+      # Granting it in the same change as the bump is the ordering that breaks.
+      issues: write
     uses: dustfeather/shared-workflows/.github/workflows/merge-on-approval.yml@v4
     with:
       runner: arc-df-shared-workflows
