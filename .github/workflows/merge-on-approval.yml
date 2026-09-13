@@ -275,6 +275,9 @@ jobs:
             # annotated. So ask for totalCount and emit it as the first line,
             # then the OPEN pairs. One call, and no dependency on a `jq` binary
             # existing on the runner: `gh --jq` is gh's own.
+            # Initialised before the read: `set -u` is on, and this is read
+            # on a path the read failure does not take.
+            read_failed=""
             if ! refs=$(gh api graphql -f query='
               query($owner:String!,$name:String!,$number:Int!){
                 repository(owner:$owner,name:$name){
@@ -294,6 +297,7 @@ jobs:
               # 502 or a secondary rate limit must not fail the run.
               echo "::error::Could not read the linked issues for #${PR_NUMBER}; close them by hand."
               refs=""
+              read_failed=1
             fi
 
             total=$(printf '%s\n' "$refs" | head -n 1)
@@ -303,7 +307,22 @@ jobs:
               echo "::error::PR #${PR_NUMBER} links ${total} issues but only the first 50 were read. Any beyond 50 were NOT closed; close them by hand."
             fi
 
-            if [ -z "$linked" ]; then
+            # Three outcomes, not two. `refs=""` on a failed read makes `linked`
+            # empty for the same reason a PR with no linked issues does, and
+            # collapsing them would print "No open linked issues to close." as
+            # fact directly beneath the ::error:: saying the read failed. That is
+            # the same conflation this step already refuses one screen up, where
+            # `unknown` and `false` get different annotations: "I could not find
+            # out" and "there is nothing there" are different facts.
+            #
+            # A flag rather than testing `[ -z "$total" ]`. That test would work
+            # today — on success `--jq` always emits totalCount, so `refs` holds
+            # at least "0" — but it silently depends on totalCount staying the
+            # FIRST line of that jq expression, and nothing would fail if a later
+            # edit reordered it.
+            if [ -n "$read_failed" ]; then
+              echo "Linked issues for #${PR_NUMBER} are UNKNOWN: the read above failed. Nothing was closed; see the error annotation."
+            elif [ -z "$linked" ]; then
               echo "No open linked issues to close."
             else
               # NEVER let a failed close fail this step, however tempting it is
@@ -325,8 +344,17 @@ jobs:
                 [ -n "$issue" ] || continue
                 # `completed`, explicitly. The default reason reads as
                 # abandoned, which is wrong for work that just shipped.
+                # `</dev/null` because this loop's stdin is the herestring that
+                # `read` is consuming. `gh issue close` does not read stdin as
+                # invoked here — the comment is inline via `--comment`, GH_TOKEN
+                # is in the step env so there is no auth prompt, and the runner is
+                # non-TTY — so this changes nothing today. It is here because a
+                # future flag that DID read stdin would swallow the rest of the
+                # list and skip every issue after the first, with no annotation:
+                # a silent miss, which is the one failure mode this block exists
+                # to make impossible.
                 if gh issue close "$issue" --repo "$issue_repo" --reason completed \
-                     --comment "Closed by ${REPO}#${PR_NUMBER} on merge."
+                     --comment "Closed by ${REPO}#${PR_NUMBER} on merge." </dev/null
                 then
                   echo "Closed ${issue_repo}#${issue}, linked by #${PR_NUMBER}"
                 else
