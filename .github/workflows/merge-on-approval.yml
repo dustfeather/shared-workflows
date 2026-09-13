@@ -91,6 +91,22 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      # Without this, a merged `Closes #N` links but never closes. GitHub computes
+      # `closingIssuesReferences` for free at PR open; EXECUTING the close at merge
+      # is a separate write to the Issues API, attributed to whoever performed the
+      # merge — here, GITHUB_TOKEN in the step below. Lacking the scope, the merge
+      # still succeeds, the link is still stored, and the close silently does not
+      # happen: no warning, no annotation, green run. Measured on
+      # ITGuys-RO/fleet-manager, where it had never worked and every "closed by a
+      # PR" issue had actually been closed by hand.
+      #
+      # NOTE FOR ANY FUTURE SCOPE ADDED HERE: a called workflow may not request
+      # more GITHUB_TOKEN permission than the calling job grants, and
+      # `permissions:` takes no expressions, so the scope cannot be conditional.
+      # Adding one here before every caller grants it turns each of those callers
+      # into a startup_failure — zero jobs, empty `--log-failed`, no annotation,
+      # in repos nobody touched. Callers first, then this file, then the tag.
+      issues: write
     steps:
       - name: Merge on approval
         env:
