@@ -208,21 +208,34 @@ jobs:
             # Read the state into a variable rather than testing the
             # substitution inline. Command substitution inside an `if`
             # condition is EXEMPT from `set -e`, so a failed `gh pr view`
-            # yields "" — which is != "true" — and the old inline form then
-            # exit 1'd claiming "not merged" for a merge that had in fact
-            # landed. That false negative costs the tag (see below), which is
-            # the one loss that cannot be repaired.
+            # collapses to "" — which is != "true" — and an inline test cannot
+            # tell "the PR is not merged" from "I could not find out". They are
+            # different facts and get different annotations here: `unknown`
+            # says the read failed, `false` says the merge did not happen.
+            # Reporting the second when the first is true sends someone looking
+            # for a failed merge that never failed.
             if ! merged=$(gh pr view "$PR_URL" --json merged --jq .merged); then
               echo "::error::Could not read the merge state of $PR_URL. The merge command exited 0; verify it and close any linked issues by hand."
               merged=unknown
             fi
 
-            # Only a CONFIRMED "false" is a real failure worth blocking the
-            # tag for — there is genuinely nothing to tag then. "unknown" is
-            # not: it means the read failed, not the merge.
+            # NOTHING here exits nonzero, including this branch, even though
+            # "the merge did not happen" sounds like the one case worth failing
+            # for. It is not, and an earlier revision of this PR had it wrong
+            # twice:
+            #
+            #   - If the read is RIGHT, main did not move. Exiting nonzero makes
+            #     tag-release.yml's `workflow_run.conclusion == 'success'` guard
+            #     false, so that workflow never runs — and its head-already-
+            #     tagged branch carries a ::warning:: written for precisely this
+            #     ambiguity ("if a merge DID land around now, it is untagged").
+            #     Failing here suppresses the one signal built to catch this.
+            #   - If the read is WRONG — the merge landed and `gh pr view`
+            #     misreported it — exiting strands that commit untagged for good.
+            #
+            # Exit 0 is better in both directions, so this is an annotation.
             if [ "$merged" = "false" ]; then
-              echo "::error::gh pr merge exited 0 but the PR is not merged"
-              exit 1
+              echo "::error::gh pr merge exited 0 but the PR reports not merged. No issues closed; check pr-merge.yml and the tag state by hand."
             fi
           fi
 
@@ -239,6 +252,13 @@ jobs:
             # cross-repo (`Closes org/other#5`), so closing against "$REPO"
             # would not merely 404 — where that number exists here too, it
             # would close an unrelated issue in the wrong repo.
+            #
+            # Be clear about what this does and does not buy: GITHUB_TOKEN is
+            # scoped to the issuing repo, so `issues: write` grants nothing in
+            # `org/other` and a genuinely cross-repo close will 403 or 404. It
+            # cannot succeed without a PAT. Targeting the right repo is still
+            # correct — it turns "silently closed the WRONG issue" into a
+            # per-issue annotation naming the one that needs a hand.
             #
             # Filter to OPEN. Re-closing a closed issue is not a no-op: it
             # overwrites stateReason and adds timeline noise, so a re-run would
@@ -276,9 +296,10 @@ jobs:
               # path. A missed close is an annotation; a missed tag is
               # unrecoverable.
               #
-              # `::error::` rather than `::warning::` so a miss is still loud
-              # and red in the run — visibility is what this whole change is
-              # about — while the exit code stays 0 and tagging proceeds.
+              # `::error::` rather than `::warning::` so a miss shows as a red
+              # annotation on an otherwise green run — an annotation does not
+              # change the job conclusion, so this buys visibility, not a red
+              # run — while the exit code stays 0 and tagging proceeds.
               while read -r issue_repo issue; do
                 [ -n "$issue" ] || continue
                 # `completed`, explicitly. The default reason reads as
