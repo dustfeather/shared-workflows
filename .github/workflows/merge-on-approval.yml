@@ -94,15 +94,26 @@ jobs:
     # Only act on a freshly submitted approving review of a non-draft PR that is
     # still open.
     #
-    # `github.event` here is the caller's `pull_request_review` payload.
+    # `github.event` here is the caller's `pull_request_review` payload, and its
+    # `pull_request` is octokit's reduced `SimplePullRequest`, not the full
+    # `pull_request`-event object — confirmed against octokit/webhooks'
+    # generated types (payload-types/schema.d.ts): it carries `state`, `draft`
+    # and `merged_at`, but NOT `merged`. An earlier version of this guard added
+    # `github.event.pull_request.merged == false` believing it excluded an
+    # already-merged PR; it does not, because that property does not exist on
+    # this event. GitHub Actions expressions don't error on a missing property,
+    # they return `null`, and `null == false` is loosely-true (both coerce to
+    # `0`), so the term was unconditionally true and skipped nothing.
     #
-    # The `merged == false` term is load-bearing and is NOT redundant with the
-    # step logic below. A second approving review routinely lands after the PR
-    # has already merged — a reviewer finishing a round the automation did not
-    # wait for. Without this term the job runs, `gh pr merge` exits nonzero with
-    # `! Pull request #N was already merged`, and the merged-state fallback then
-    # reads MERGED and treats the run as a success it did not perform. That
-    # false success is indistinguishable from a real merge to anything watching
+    # `state == 'open'` is the entire guard, and it is sufficient on its own: a
+    # merged PR's `state` is always `closed`, same as a PR closed without
+    # merging, so this one term already excludes both. A second approving
+    # review routinely lands after the PR has already merged — a reviewer
+    # finishing a round the automation did not wait for. Without this term the
+    # job runs, `gh pr merge` exits nonzero with `! Pull request #N was already
+    # merged`, and the merged-state fallback then reads MERGED and treats the
+    # run as a success it did not perform. That false success is
+    # indistinguishable from a real merge to anything watching
     # `workflow_run.conclusion == 'success'`, so it re-triggers the caller's
     # deploy: observed 2026-09-13 on ITGuys-RO/fleet-manager#152, where a stale
     # review at 21:15 caused a second live Cloudflare deploy of a commit that
@@ -116,7 +127,6 @@ jobs:
       github.event_name == 'pull_request_review' &&
       github.event.review.state == 'approved' &&
       github.event.pull_request.draft == false &&
-      github.event.pull_request.merged == false &&
       github.event.pull_request.state == 'open'
     runs-on: ${{ inputs.runner }}
     permissions:
