@@ -366,7 +366,15 @@ jobs:
               # change the job conclusion, so this buys visibility, not a red
               # run — while the exit code stays 0 and tagging proceeds.
               while read -r issue_repo issue; do
-                [ -n "$issue" ] || continue
+                # The one place in this block that could skip without saying so, in a
+                # block whose whole thesis is that a close which does not happen is
+                # always annotated. Unreachable today — `nameWithOwner` is never empty
+                # and command substitution strips the trailing newline off `linked` —
+                # but "unreachable" is why it would stay silent if it ever happened.
+                if [ -z "$issue" ]; then
+                  echo "::error::Malformed linked-issue row for #${PR_NUMBER}: '${issue_repo}'. Close any remaining linked issues by hand."
+                  continue
+                fi
                 # `completed`, explicitly. The default reason reads as
                 # abandoned, which is wrong for work that just shipped.
                 # `</dev/null` because this loop's stdin is the herestring that
