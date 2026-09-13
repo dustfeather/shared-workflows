@@ -113,6 +113,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           MODE: ${{ inputs.mode }}
           MERGE_METHOD_INPUT: ${{ inputs.merge-method }}
           DELETE_BRANCH: ${{ inputs.delete-branch }}
@@ -195,30 +196,55 @@ jobs:
               exit 1
             fi
 
-            pr_number=$(gh pr view "$PR_URL" --json number --jq .number)
-
-            # Filter to OPEN. Re-closing an already-closed issue is not a
-            # no-op: it overwrites stateReason and adds timeline noise, so a
-            # re-run would rewrite history it did not create.
+            # Each node carries its OWN repository. A closing keyword may be
+            # cross-repo (`Closes org/other#5`), so closing against "$REPO"
+            # would not merely 404 — where that number exists here too, it
+            # would close an unrelated issue in the wrong repo.
+            #
+            # Filter to OPEN. Re-closing a closed issue is not a no-op: it
+            # overwrites stateReason and adds timeline noise, so a re-run would
+            # rewrite history it did not create.
             linked=$(gh api graphql -f query='
               query($owner:String!,$name:String!,$number:Int!){
                 repository(owner:$owner,name:$name){
                   pullRequest(number:$number){
-                    closingIssuesReferences(first:50){ nodes { number state } }
+                    closingIssuesReferences(first:50){
+                      nodes { number state repository { nameWithOwner } }
+                    }
                   } } }' \
-              -f owner="${REPO%%/*}" -f name="${REPO##*/}" -F number="$pr_number" \
+              -f owner="${REPO%%/*}" -f name="${REPO##*/}" -F number="$PR_NUMBER" \
               --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[]
-                    | select(.state == "OPEN") | .number')
+                    | select(.state == "OPEN")
+                    | "\(.repository.nameWithOwner) \(.number)"')
 
             if [ -z "$linked" ]; then
               echo "No open linked issues to close."
             else
-              for issue in $linked; do
-                echo "Closing #$issue, linked by #$pr_number"
+              # NEVER let a failed close fail this step, however tempting it is
+              # to be strict here. By this point the merge has ALREADY landed
+              # and cannot be undone, and tag-release.yml triggers on
+              # `workflow_run.conclusion == 'success'` — a GITHUB_TOKEN merge
+              # raises no `push` event, so that workflow_run is the ONLY
+              # trigger the merge commit will ever get. Exiting nonzero because
+              # one issue was locked, transferred, or hit a transient API error
+              # would leave that commit permanently untagged, with no retry
+              # path. A missed close is an annotation; a missed tag is
+              # unrecoverable.
+              #
+              # `::error::` rather than `::warning::` so a miss is still loud
+              # and red in the run — visibility is what this whole change is
+              # about — while the exit code stays 0 and tagging proceeds.
+              while read -r issue_repo issue; do
+                [ -n "$issue" ] || continue
                 # `completed`, explicitly. The default reason reads as
                 # abandoned, which is wrong for work that just shipped.
-                gh issue close "$issue" --repo "$REPO" --reason completed \
-                  --comment "Closed by #${pr_number}. GitHub does not run closing-keyword handling for a merge performed with GITHUB_TOKEN, so \`merge-on-approval\` performs the close."
-              done
+                if gh issue close "$issue" --repo "$issue_repo" --reason completed \
+                     --comment "Closed by ${REPO}#${PR_NUMBER}. GitHub does not run closing-keyword handling for a merge performed with GITHUB_TOKEN, so \`merge-on-approval\` performs the close."
+                then
+                  echo "Closed ${issue_repo}#${issue}, linked by #${PR_NUMBER}"
+                else
+                  echo "::error::Could not close ${issue_repo}#${issue}, linked by #${PR_NUMBER}. The merge succeeded and is being tagged; close this issue by hand."
+                fi
+              done <<< "$linked"
             fi
           fi
