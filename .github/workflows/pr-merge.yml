@@ -39,7 +39,7 @@ jobs:
     # header defers that to the caller's branch protection. This repo is
     # public and `main` is unprotected, so without a gate here any account
     # could submit an approving review on any open PR and land it on main.
-    # tag-release.yml would then re-point `v4`, which every caller resolves at
+    # tag-release.yml would then re-point `v5`, which every caller resolves at
     # runtime, cross-owner `ITGuys-RO/*` repos included. Self-approval is
     # blocked by GitHub; a second throwaway account is not a barrier.
     # dependabot-auto-merge.yml calls its equivalent check a trusted-trigger
@@ -132,8 +132,9 @@ jobs:
       # Merge the commit that was actually reviewed. An approval names a SHA;
       # a merge does not. With no branch protection there is no stale-review
       # dismissal, so a commit pushed between the approval and this job would
-      # otherwise land unreviewed — and tag-release then re-points `v4`, which
-      # all five callers, cross-owner ones included, resolve at runtime.
+      # otherwise land unreviewed — and tag-release then re-points `v5`, which
+      # every caller resolves at runtime — 103 `uses:` references across 5
+      # owners as of 2026-09-13, cross-owner `ITGuys-RO/*` repos included.
       # A moved head fails the job and leaves the PR open, which is right.
       match-head-commit: ${{ github.event.review.commit_id }}
       # `delete-branch` is deliberately NOT set. The repo carries
