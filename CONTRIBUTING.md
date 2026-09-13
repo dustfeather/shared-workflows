@@ -37,6 +37,19 @@ The repo uses GitHub Actions' floating major-tag convention:
   applies to the CURRENT major, so cutting a new one freezes the old tag
   where it stands.
 
+Bumps larger than a patch are requested with a token. **Put it in the PR
+title, not a commit message.** PRs are landed with a squash merge, which
+makes the PR title the subject of the commit that reaches `main` and moves
+the original commit subjects into the body — and `tag-release.yml` scans
+subjects only, deliberately, so that prose discussing a bump cannot cut
+one. A token left on a commit subject would therefore be silently ignored
+and the release would come out a patch.
+
+`merge-on-approval.yml` refuses the merge when a commit subject asks for a
+bigger bump than the PR title does, so this fails loudly rather than
+quietly. A commit pushed straight to `main` still carries its token on its
+own subject, since nothing replays it.
+
 Patch = wording / comments / log-message tweaks.
 Minor = new optional input, new bot in default allowlist, new feature
 behind a flag.
