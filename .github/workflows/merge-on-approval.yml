@@ -30,6 +30,16 @@ on:
           fails if required checks are still pending — use only where
           auto-merge is unavailable AND the approving review can only land
           after CI is already green.
+
+          LINKED-ISSUE CLOSING IS "direct" ONLY. On "direct" this workflow
+          closes the PR's `Closes #N` issues itself, because GitHub does not
+          run closing-keyword handling for a merge performed with
+          GITHUB_TOKEN. On "auto" it cannot: `gh pr merge --auto` hands the
+          merge to GitHub and returns immediately, so this job finishes before
+          anything is merged and there is nothing to close. Whether GitHub's
+          own keyword handling fires for the deferred auto-merge has NOT been
+          verified here — do not assume either way. If you need the close
+          guaranteed, use "direct".
         type: string
         default: auto
       merge-method:
@@ -190,6 +200,10 @@ jobs:
           # `direct` only. On the `--auto` path gh hands the merge to GitHub
           # and returns immediately, so nothing has merged yet and there is
           # nothing to close; that path keeps its existing behaviour.
+          if [ "$MODE" != "direct" ]; then
+            echo "Mode is '$MODE', not 'direct': the merge is deferred to GitHub, so this run has nothing merged yet and closes no linked issues. See the \`mode\` input description."
+          fi
+
           if [ "$MODE" = "direct" ]; then
             # Read the state into a variable rather than testing the
             # substitution inline. Command substitution inside an `if`
@@ -210,6 +224,13 @@ jobs:
               echo "::error::gh pr merge exited 0 but the PR is not merged"
               exit 1
             fi
+          fi
+
+          if [ "$MODE" = "direct" ] && [ "${merged:-}" != "true" ] && [ "${merged:-}" != "false" ]; then
+            # Neither true nor false, and we did not exit above. Saying so is
+            # the whole point of this change: a skipped close that logs nothing
+            # is the silent no-op being removed here.
+            echo "::error::Unexpected merge state '${merged:-}' for $PR_URL. Linked issues were NOT closed; verify the merge and close them by hand."
           fi
 
           if [ "$MODE" = "direct" ] && [ "${merged:-}" = "true" ]; then
@@ -263,7 +284,7 @@ jobs:
                 # `completed`, explicitly. The default reason reads as
                 # abandoned, which is wrong for work that just shipped.
                 if gh issue close "$issue" --repo "$issue_repo" --reason completed \
-                     --comment "Closed by ${REPO}#${PR_NUMBER}. GitHub does not run closing-keyword handling for a merge performed with GITHUB_TOKEN, so \`merge-on-approval\` performs the close."
+                     --comment "Closed by ${REPO}#${PR_NUMBER} on merge."
                 then
                   echo "Closed ${issue_repo}#${issue}, linked by #${PR_NUMBER}"
                 else
