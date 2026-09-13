@@ -300,7 +300,23 @@ jobs:
               read_failed=1
             fi
 
-            total=$(printf '%s\n' "$refs" | head -n 1)
+            # `read`, not `head -n 1`. `pipefail` is on, and `head` exits as
+            # soon as it has its line without draining the pipe, so a `refs`
+            # bigger than the 64K pipe buffer gives `printf` SIGPIPE, status
+            # 141, and `set -e` kills the step — an exit after an irreversible
+            # merge, which is the one thing this whole block is built not to do.
+            # Unreachable at `first: 50` (worst case ~7.5K against a 64K buffer,
+            # and MEASURED to survive 500 lines / 33K), but the invariant should
+            # not be a consequence of a page size set 20 lines away.
+            #
+            # A herestring always supplies the trailing newline, so `read`
+            # returns 0 and does not trip `set -e`. `${refs#*$'\n'}` is NOT a
+            # substitute for the second line: a single-line `refs` comes back
+            # unchanged and would be read as an issue.
+            #
+            # `tail -n +2` stays. It cannot SIGPIPE — emitting from line 2 means
+            # reading the whole stream — MEASURED at rc=0 over 3M lines.
+            IFS= read -r total <<< "$refs"
             linked=$(printf '%s\n' "$refs" | tail -n +2)
 
             if [ -n "$total" ] && [ "$total" -gt 50 ]; then
