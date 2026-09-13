@@ -50,14 +50,24 @@ PRIVILEGED = {
     # Posts the review and authenticates to the Anthropic API via OIDC.
     ".github/workflows/claude-code-review.yml": {"pull-requests", "id-token"},
     ".github/workflows/claude.yml": {"pull-requests", "id-token", "contents"},
-    # Merging is the point of these two.
-    ".github/workflows/dependabot-auto-merge.yml": {"contents", "pull-requests"},
-    # `issues` is here because a merged `Closes #N` does not close anything without
-    # it: GitHub computes the link for free, but EXECUTING the close is a write to
-    # the Issues API attributed to whoever performed the merge — GITHUB_TOKEN here.
-    # Deliberate, and it cost four caller PRs first (uninsta, fleet-manager, invest,
-    # itguys.ro), because this list is exactly the set that every caller must match.
-    # dependabot-auto-merge does NOT get it: Dependabot never writes closing keywords.
+    # Merging is the point of these two, and both now close the merged PR's
+    # linked issues themselves.
+    #
+    # `issues` is on both because a merged `Closes #N` does not close anything
+    # without it: GitHub computes the link for free, but EXECUTING the close is a
+    # write to the Issues API attributed to whoever performed the merge —
+    # GITHUB_TOKEN here. Deliberate on both, and each cost its caller PRs first
+    # (merge-on-approval: uninsta, fleet-manager, invest, itguys.ro;
+    # dependabot-auto-merge: eleven callers, 2026-09-13), because this list is
+    # exactly the set that every caller must match.
+    #
+    # dependabot-auto-merge USED to be excluded here, on the reasoning that
+    # Dependabot never writes closing keywords. That is true of Dependabot's own
+    # bodies and false of the workflow: a caller can add body text to a
+    # Dependabot PR, and the reusable workflow cannot tell the difference. The
+    # exclusion bought nothing and left the two merge paths behaving differently
+    # for no reason a caller could see. Reversed deliberately (issue #35).
+    ".github/workflows/dependabot-auto-merge.yml": {"contents", "pull-requests", "issues"},
     ".github/workflows/merge-on-approval.yml": {"contents", "pull-requests", "issues"},
     # Commits the version bump and cuts the GitHub release.
     ".github/workflows/release-extension.yml": {"contents"},
