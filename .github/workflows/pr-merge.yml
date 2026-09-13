@@ -75,15 +75,28 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-      # Inert today, and deliberately granted anyway: the pin below is `@v4`,
-      # which never requested this scope. A caller may always grant MORE than
-      # the callee asks; the reverse is a `startup_failure` with zero jobs and
-      # an empty `--log-failed`. v5's merge-on-approval requires `issues: write`
-      # — without it a merged `Closes #N` stores the link and silently never
-      # closes — so whenever this pin moves to `@v5` the grant is already here.
-      # Granting it in the same change as the bump is the ordering that breaks.
+      # Live as of the `@v5` pin below: merge-on-approval closes the PR's
+      # linked issues itself, and that write needs this scope. Without it a
+      # merged `Closes #N` stores the link and silently never closes — the
+      # merge still succeeds, the link is still computed, and nothing goes red.
+      #
+      # It was granted one release EARLY, while the pin was still `@v4` and
+      # nothing here requested it, because the ordering is asymmetric: a caller
+      # may always grant MORE than the callee asks, but a callee asking for
+      # more than the caller grants is a `startup_failure` with zero jobs and
+      # an empty `--log-failed`. Granting it in the same change as the bump is
+      # the ordering that breaks. Keep that shape for any future scope.
       issues: write
-    uses: dustfeather/shared-workflows/.github/workflows/merge-on-approval.yml@v4
+    # `@v5`, floating, not a pinned `@v5.1.0`. Every other caller of this repo
+    # tracks the floating major, and this shim is the one that merges the
+    # commits those releases are cut from — pinning it exactly would make this
+    # repo's own automation the only thing not exercising what it ships.
+    #
+    # `@v4` is FROZEN at v4.14.2 and predates the close block entirely:
+    # tag-release.yml re-points only the CURRENT major, so the v5 cut stranded
+    # v4 where it stood. A pin left on `@v4` does not silently inherit
+    # anything; it keeps pre-v5 behaviour for good.
+    uses: dustfeather/shared-workflows/.github/workflows/merge-on-approval.yml@v5
     with:
       runner: arc-df-shared-workflows
       # `direct`, not the reusable workflow's `auto` default, because
