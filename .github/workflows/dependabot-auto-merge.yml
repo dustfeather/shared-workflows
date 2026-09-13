@@ -13,6 +13,20 @@ on:
           isn't available (Free private, see
           github-private-repo-auto-merge-workaround skill). Pair with the
           `workflow_run` trigger watching your CI workflow.
+
+          LINKED-ISSUE CLOSING IS "direct" ONLY. On "direct" this workflow
+          closes the PR's `Closes #N` issues itself, because GitHub does not
+          run closing-keyword handling for a merge performed with
+          GITHUB_TOKEN. On "auto" it cannot: `gh pr merge --auto` hands the
+          merge to GitHub and returns immediately, so this job finishes before
+          anything is merged and there is nothing to close. Whether GitHub's
+          own keyword handling fires for the deferred auto-merge has NOT been
+          verified here — do not assume either way. If you need the close
+          guaranteed, use "direct".
+
+          This matters more here than in merge-on-approval.yml, because "auto"
+          is the default on this workflow: a caller that never sets `mode` gets
+          no linked-issue closing, and the step log says so on every run.
         type: string
         default: auto
       merge-method:
