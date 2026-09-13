@@ -221,6 +221,23 @@ jobs:
           # commit_id was a direct human push whose own commit message carried
           # the keyword — never a bot merge.
           #
+          # CONTRADICTED, and not yet explained. On dustfeather/shared-workflows
+          # PR #37 (2026-09-13) the linked issue #35 DID close on a GITHUB_TOKEN
+          # merge: closedAt equal to the merge instant, stateReason COMPLETED,
+          # and no comment — so not this block, which provably never ran on that
+          # merge (the state read below was broken, see its comment). Something
+          # outside this workflow closed it, and GitHub's own keyword handling is
+          # the only candidate.
+          #
+          # Two measurements, opposite results, mechanism unknown. Candidate
+          # differences not yet tested: merge method (rebase here, squash on
+          # fleet-manager), repo visibility, or a platform change between the
+          # two dates. Until that is settled this block STAYS: it is idempotent
+          # by construction — the read below filters to state == OPEN, so if
+          # GitHub already closed the issue there is nothing to close and the
+          # log says so. Belt and braces costs one API call; assuming the wrong
+          # one of two contradictory measurements costs a silently open issue.
+          #
           # `direct` only. On the `--auto` path gh hands the merge to GitHub
           # and returns immediately, so nothing has merged yet and there is
           # nothing to close; that path keeps its existing behaviour.
@@ -238,7 +255,21 @@ jobs:
             # says the read failed, `false` says the merge did not happen.
             # Reporting the second when the first is true sends someone looking
             # for a failed merge that never failed.
-            if ! merged=$(gh pr view "$PR_URL" --json merged --jq .merged); then
+            #
+            # `--json state`, NOT `--json merged`. There is no `merged` field:
+            # gh answers that request with `Unknown JSON field: "merged"` plus a
+            # dump of the real ones (`state`, `closed`, `mergedAt`, `mergedBy`),
+            # and exits nonzero — so this read took its failure branch on EVERY
+            # direct merge from v5.1.0 to v5.2.0. `merged` became `unknown`, the
+            # close loop below never ran once, and because nothing here exits
+            # nonzero after a merge the job stayed green with the annotation
+            # buried in the log. The feature was dead code and looked shipped.
+            # Measured on PR #37, run 34779875479.
+            #
+            # `(.state == "MERGED")` makes jq emit a bare `true`/`false`, which
+            # is what every comparison below already expects — so the
+            # three-state logic (`true` / `false` / `unknown`) is unchanged.
+            if ! merged=$(gh pr view "$PR_URL" --json state --jq '(.state == "MERGED")'); then
               echo "::error::Could not read the merge state of $PR_URL (merge command exited ${merge_rc}). Verify it and close any linked issues by hand."
               merged=unknown
             fi

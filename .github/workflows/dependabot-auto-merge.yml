@@ -205,7 +205,14 @@ jobs:
             # collapses to "" — which is != "true" — and an inline test cannot
             # tell "the PR is not merged" from "I could not find out". Those
             # are different facts and get different annotations here.
-            if ! merged=$(gh pr view "$PR_URL" --json merged --jq .merged); then
+            #
+            # `--json state`, NOT `--json merged` — there is no `merged` field.
+            # gh answers that with `Unknown JSON field: "merged"` and exits
+            # nonzero, so this read failed on every direct merge and the close
+            # loop below never ran. See the same comment in merge-on-approval.yml.
+            # `(.state == "MERGED")` emits a bare `true`/`false`, so the
+            # three-state logic below is unchanged.
+            if ! merged=$(gh pr view "$PR_URL" --json state --jq '(.state == "MERGED")'); then
               echo "::error::Could not read the merge state of $PR_URL (merge command exited ${merge_rc}). Verify it and close any linked issues by hand."
               merged=unknown
             fi
