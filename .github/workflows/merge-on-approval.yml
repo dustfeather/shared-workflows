@@ -189,6 +189,66 @@ jobs:
           echo "Merge method: $method"
           echo "PR: $PR_URL"
 
+          # Bump-token guard. This runs BEFORE the merge on purpose: here the
+          # cost of being wrong is a re-run, and one line further down it is
+          # unrecoverable. The merge cannot be undone, tag-release.yml only ever
+          # sees this job's `workflow_run`, and a nonzero exit after the merge
+          # therefore costs the tag outright with no retry path.
+          #
+          # The hazard is specific to squash. A bump token (`#minor`/`#major`)
+          # is written on a commit SUBJECT, and tag-release.yml scans subjects
+          # only — deliberately, because a body that *discusses* a bump matches
+          # itself and cuts a spurious release. A squash merge produces ONE
+          # commit whose subject is the PR title and moves every branch subject
+          # into the body, so the token lands exactly where the scan is designed
+          # not to look. The release silently degrades to a patch and nothing
+          # warns. Measured on dustfeather/shared-workflows 2026-09-13.
+          #
+          # Rebase and merge-commit flows replay the subjects intact, so they
+          # are not checked. Compare the EFFECTIVE bump rather than each token:
+          # a `#minor` on a branch commit under a `#major` PR title is already
+          # subsumed (largest wins), and failing on it would be noise.
+          if [ "$method" = "--squash" ]; then
+            pr_title=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json title --jq '.title')
+            pr_subjects=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json commits --jq '.commits[].messageHeadline')
+            pr_commits=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json commits --jq '.commits | length')
+            squash_title_src=$(gh api "/repos/$REPO" --jq '.squash_merge_commit_title')
+
+            # "The squash subject is the PR title" is true only conditionally, and
+            # the exception is exactly the one that would make this guard's first
+            # visible act a false alarm. `COMMIT_OR_PR_TITLE` — GitHub's default —
+            # names both sources because it uses THE COMMIT's title when the PR has
+            # a single commit, and the PR title only from two commits up. So a
+            # one-commit PR on a default-configured repo carries its token through
+            # the squash untouched and must not be refused.
+            if [ "$pr_commits" = 1 ] && [ "$squash_title_src" = COMMIT_OR_PR_TITLE ]; then
+              echo "Bump-token guard: single-commit PR under COMMIT_OR_PR_TITLE — the commit subject becomes the squash subject, so a token on it survives. Nothing to check."
+            else
+              # Compare the EFFECTIVE bump rather than each token: largest wins, so
+              # a #minor on a branch commit under a #major PR title is already
+              # subsumed, and failing on it is noise that trains people to ignore
+              # the guard.
+              bump_rank() {
+                case "$1" in
+                  *'#major'*) echo 2 ;;
+                  *'#minor'*) echo 1 ;;
+                  *)          echo 0 ;;
+                esac
+              }
+              subject_rank=$(bump_rank "$pr_subjects")
+              title_rank=$(bump_rank "$pr_title")
+              if [ "$subject_rank" -gt "$title_rank" ]; then
+                case "$subject_rank" in
+                  2) lost='#major' ;;
+                  *) lost='#minor' ;;
+                esac
+                echo "::error::A ${lost} token is on a commit subject but not in the PR title. Squashing would move it into the commit body, where tag-release.yml does not look, and the release would be cut as a patch instead. Put ${lost} in the PR title — it becomes the squash commit's subject — then re-run this workflow."
+                exit 1
+              fi
+              echo "Bump-token guard: the PR title carries at least the bump its commit subjects ask for."
+            fi
+          fi
+
           del=""
           if [ "$DELETE_BRANCH" = "true" ]; then
             del="--delete-branch"
@@ -288,6 +348,15 @@ jobs:
           #     caller merging by rebase with a keyword-carrying commit. The
           #     read below filters to state == OPEN, so that is a logged no-op
           #     rather than a double close.
+          #
+          # Under the default `squash` the branch's commit messages land in the
+          # BODY of the synthesised commit rather than as commits of their own.
+          # Whether path (2) still fires from there has NOT been measured, and
+          # nothing here depends on the answer: path (1) is dead regardless, so
+          # this block is what closes the issue, and the state == OPEN filter
+          # makes path (2) harmless whichever way it goes. The #35 measurement
+          # below is a rebase-era observation kept as evidence for the
+          # two-closer reading, not a description of the current default.
           #
           # `direct` only. On the `--auto` path gh hands the merge to GitHub
           # and returns immediately, so nothing has merged yet and there is

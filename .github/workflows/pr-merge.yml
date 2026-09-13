@@ -121,14 +121,31 @@ jobs:
       # re-runs the review) or merge by hand. A red run left visible is the
       # right outcome; the alternative is a retry loop racing whatever moved.
       mode: direct
-      # Rebase, not the reusable workflow's `squash` default. tag-release.yml
-      # picks the version bump by scanning `#minor`/`#major` across the SUBJECT
-      # of every commit in the push — subjects only, deliberately, so that
-      # prose about versioning in a body cannot cut a release. A squash
-      # collapses N subjects into one, so a token carried by an earlier commit
-      # is lost and a minor bump silently lands as a patch. Rebase replays each
-      # commit onto main with its subject intact.
-      merge-method: rebase
+      # Squash, matching the reusable workflow's default. This was `rebase`
+      # until 2026-09-14, for a reason that was correct and has been paid for
+      # differently: tag-release.yml picks the bump by scanning `#minor`/`#major`
+      # across the SUBJECT of every commit in the push — subjects only,
+      # deliberately, so prose about versioning in a body cannot cut a release.
+      # A squash collapses N subjects into one (the PR title) and pushes the
+      # originals into the body, so a token carried by an earlier commit was
+      # lost and a minor silently landed as a patch. Rebase replayed each
+      # subject intact and avoided that.
+      #
+      # What rebase could not do is keep the history verified. A "Rebase and
+      # merge" is executed on GitHub's servers, which replays your commits as
+      # new objects and does NOT sign them — and no local git config reaches
+      # that far, `rebase.gpgSign` included. Measured here 2026-09-14: 35 of the
+      # last 60 commits on main unsigned, every one of them a replay (committer
+      # date != author date), against 25 signed commits pushed directly. GitHub
+      # signs the commit it synthesises for a squash with its own web-flow key,
+      # so squashing is what makes main's history verify at all.
+      #
+      # The bump token moves to the PR TITLE, which becomes the squash commit's
+      # subject — so tag-release.yml's scan is unchanged and still sees it.
+      # merge-on-approval.yml refuses the merge outright when a commit subject
+      # asks for a larger bump than the PR title does, so the silent-patch case
+      # that justified rebase cannot come back unannounced.
+      merge-method: squash
       # Merge the commit that was actually reviewed. An approval names a SHA;
       # a merge does not. With no branch protection there is no stale-review
       # dismissal, so a commit pushed between the approval and this job would
