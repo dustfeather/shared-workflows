@@ -52,7 +52,13 @@ PRIVILEGED = {
     ".github/workflows/claude.yml": {"pull-requests", "id-token", "contents"},
     # Merging is the point of these two.
     ".github/workflows/dependabot-auto-merge.yml": {"contents", "pull-requests"},
-    ".github/workflows/merge-on-approval.yml": {"contents", "pull-requests"},
+    # `issues` is here because a merged `Closes #N` does not close anything without
+    # it: GitHub computes the link for free, but EXECUTING the close is a write to
+    # the Issues API attributed to whoever performed the merge — GITHUB_TOKEN here.
+    # Deliberate, and it cost four caller PRs first (uninsta, fleet-manager, invest,
+    # itguys.ro), because this list is exactly the set that every caller must match.
+    # dependabot-auto-merge does NOT get it: Dependabot never writes closing keywords.
+    ".github/workflows/merge-on-approval.yml": {"contents", "pull-requests", "issues"},
     # Commits the version bump and cuts the GitHub release.
     ".github/workflows/release-extension.yml": {"contents"},
     # Not workflow_call — this one tags its own repo.
