@@ -25,13 +25,17 @@ the blast radius accordingly.
 
 The repo uses GitHub Actions' floating major-tag convention:
 
-- `v1` — moving tag. Every backwards-compatible commit on `main` moves
-  this tag forward (`git tag -f v1 && git push --force origin v1`).
-  Callers pin to this and pick up improvements automatically.
-- `vX.Y.Z` — immutable per-commit tag. Created for archaeology so the
-  exact version a caller was on at any point in time can be reconstructed.
-- `v2` — only when an input/secret/permission becomes breaking. New
-  callers opt in by changing their `uses:` reference.
+- `v5` — moving tag, the current major. `tag-release.yml` re-points it
+  automatically on every push to `main`; nobody runs `git tag -f` by hand.
+  Callers pin to this and pick up improvements on their next run.
+- `vX.Y.Z` — immutable per-commit tag, cut by the same workflow. Created
+  for archaeology so the exact version a caller was on at any point in
+  time can be reconstructed.
+- `v6` — only when an input/secret/permission becomes breaking, and only
+  deliberately: the major is never bumped automatically. New callers opt
+  in by changing their `uses:` reference. Note that re-pointing only ever
+  applies to the CURRENT major, so cutting a new one freezes the old tag
+  where it stands.
 
 Patch = wording / comments / log-message tweaks.
 Minor = new optional input, new bot in default allowlist, new feature
