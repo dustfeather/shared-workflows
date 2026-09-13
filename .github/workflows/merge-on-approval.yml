@@ -91,12 +91,33 @@ permissions:
 
 jobs:
   merge:
-    # Only act on a freshly submitted approving review of a non-draft PR.
+    # Only act on a freshly submitted approving review of a non-draft PR that is
+    # still open.
+    #
     # `github.event` here is the caller's `pull_request_review` payload.
+    #
+    # The `merged == false` term is load-bearing and is NOT redundant with the
+    # step logic below. A second approving review routinely lands after the PR
+    # has already merged — a reviewer finishing a round the automation did not
+    # wait for. Without this term the job runs, `gh pr merge` exits nonzero with
+    # `! Pull request #N was already merged`, and the merged-state fallback then
+    # reads MERGED and treats the run as a success it did not perform. That
+    # false success is indistinguishable from a real merge to anything watching
+    # `workflow_run.conclusion == 'success'`, so it re-triggers the caller's
+    # deploy: observed 2026-09-13 on ITGuys-RO/fleet-manager#152, where a stale
+    # review at 21:15 caused a second live Cloudflare deploy of a commit that
+    # had already deployed cleanly 17 minutes earlier.
+    #
+    # Skipping at the job level rather than exiting early inside a step is the
+    # point. A job whose `if:` is false is `skipped`, and a run whose only job
+    # skipped concludes `skipped` — which the deploy guard correctly ignores. A
+    # step that returns early still leaves the job green, which is the bug.
     if: |
       github.event_name == 'pull_request_review' &&
       github.event.review.state == 'approved' &&
-      github.event.pull_request.draft == false
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.merged == false &&
+      github.event.pull_request.state == 'open'
     runs-on: ${{ inputs.runner }}
     permissions:
       contents: write
