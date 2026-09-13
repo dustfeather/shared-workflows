@@ -260,6 +260,33 @@ jobs:
             # Exit 0 is better in both directions, so this is an annotation.
             if [ "$merged" = "false" ]; then
               echo "::error::The PR reports not merged (merge command exited ${merge_rc}). No issues closed; check pr-merge.yml and the tag state by hand."
+
+              # The ONE case after the merge command that still exits nonzero,
+              # and it is not a reversal of the reasoning above — it is the
+              # boundary of it.
+              #
+              # That reasoning covers the AMBIGUOUS state: gh exited 0 while the
+              # PR reads as not-merged. The two signals disagree, either could be
+              # the liar, and if the merge did land then exiting strands the
+              # commit untagged for good. So `merge_rc = 0` stays green here.
+              #
+              # When gh ALSO exited nonzero the signals agree, and they agree on
+              # the one fact that makes failing safe: nothing landed. No merge
+              # commit exists, so there is no tag to lose and nothing for the
+              # close block to close. Staying green would cost the red run that
+              # two separate places still promise — the `match-head-commit` input
+              # description in this file ("fails the job loudly", and it is the
+              # only thing standing between an unreviewed commit and a caller's
+              # main), and pr-merge.yml's "the run goes RED and the PR stays
+              # open". An earlier revision of this commit swallowed every merge
+              # failure, including a conflict and a stale head, and turned both
+              # of those promises into annotations on a green run.
+              #
+              # This is the same rule the `auto` path is left bare for: nothing
+              # landed there either, so failing is correct.
+              if [ "$merge_rc" -ne 0 ]; then
+                exit 1
+              fi
             fi
           fi
 
