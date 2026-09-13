@@ -56,12 +56,14 @@ Consequences a change here is most likely to get wrong:
   skipped run, absent. No run means no review; no review means no approval; and
   `pr-merge.yml` triggers on `pull_request_review`. So such a PR cannot land
   itself, nothing goes red, and it sits waiting for CI that will never be
-  scheduled. Push that file straight to `main` (that is how the `@v4`→`@v5` pin
-  bump shipped), or bundle it with a change to another path. Editing it inside a
-  larger PR has a second, unrelated failure: `claude-code-action` rejects its
-  OIDC exchange when the PR edits the workflow that triggered the run, then
-  swallows the 401 and exits 0 — the review silently no-ops while the check
-  stays green.
+  scheduled. **Push that file straight to `main`** — that is how the `@v4`→`@v5`
+  pin bump shipped, and it is the only remedy. Bundling the edit with a change to
+  another path looks like a second option and is not one: the run then exists, but
+  `claude-code-action` rejects its OIDC exchange whenever the PR edits the
+  workflow that triggered the run, then swallows the 401 and exits 0. So
+  bundling trades "no run at all" for "a green run that reviewed nothing",
+  which is strictly worse here — the first failure is visible, the second is
+  not. Treat bundling as a failure mode, not a fallback.
 
 - **`#major` behaves asymmetrically by path.** On a real push range, a
   `#major` not on the head subject is a hard `exit 1`. On the `workflow_run`
