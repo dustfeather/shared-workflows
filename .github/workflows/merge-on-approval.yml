@@ -191,10 +191,28 @@ jobs:
           # and returns immediately, so nothing has merged yet and there is
           # nothing to close; that path keeps its existing behaviour.
           if [ "$MODE" = "direct" ]; then
-            if [ "$(gh pr view "$PR_URL" --json merged --jq .merged)" != "true" ]; then
+            # Read the state into a variable rather than testing the
+            # substitution inline. Command substitution inside an `if`
+            # condition is EXEMPT from `set -e`, so a failed `gh pr view`
+            # yields "" — which is != "true" — and the old inline form then
+            # exit 1'd claiming "not merged" for a merge that had in fact
+            # landed. That false negative costs the tag (see below), which is
+            # the one loss that cannot be repaired.
+            if ! merged=$(gh pr view "$PR_URL" --json merged --jq .merged); then
+              echo "::error::Could not read the merge state of $PR_URL. The merge command exited 0; verify it and close any linked issues by hand."
+              merged=unknown
+            fi
+
+            # Only a CONFIRMED "false" is a real failure worth blocking the
+            # tag for — there is genuinely nothing to tag then. "unknown" is
+            # not: it means the read failed, not the merge.
+            if [ "$merged" = "false" ]; then
               echo "::error::gh pr merge exited 0 but the PR is not merged"
               exit 1
             fi
+          fi
+
+          if [ "$MODE" = "direct" ] && [ "${merged:-}" = "true" ]; then
 
             # Each node carries its OWN repository. A closing keyword may be
             # cross-repo (`Closes org/other#5`), so closing against "$REPO"
@@ -204,7 +222,7 @@ jobs:
             # Filter to OPEN. Re-closing a closed issue is not a no-op: it
             # overwrites stateReason and adds timeline noise, so a re-run would
             # rewrite history it did not create.
-            linked=$(gh api graphql -f query='
+            if ! linked=$(gh api graphql -f query='
               query($owner:String!,$name:String!,$number:Int!){
                 repository(owner:$owner,name:$name){
                   pullRequest(number:$number){
@@ -216,6 +234,12 @@ jobs:
               --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[]
                     | select(.state == "OPEN")
                     | "\(.repository.nameWithOwner) \(.number)"')
+            then
+              # Same rule as every other post-merge command here: a transient
+              # 502 or a secondary rate limit must not fail the run.
+              echo "::error::Could not read the linked issues for #${PR_NUMBER}; close them by hand."
+              linked=""
+            fi
 
             if [ -z "$linked" ]; then
               echo "No open linked issues to close."
