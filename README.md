@@ -909,9 +909,15 @@ convention). Every push to `main` is auto-tagged by
 component by one (wrapping at 100 into minor; minor grows without bound),
 and it re-points the floating `vN` tag at the new commit. **major is never
 bumped automatically** — a major bump can break `@vN` callers, so it only
-happens when you ask for it. To request a larger bump for a given commit,
-put a token in that commit's subject line — `#minor` or `#major` (largest
-wins; `#patch` is the explicit form of the default).
+happens when you ask for it. Request a larger bump with a token — `#minor`
+or `#major` (largest wins; `#patch` is the explicit form of the default).
+Where the token goes depends on how the change lands: **in the PR title**
+when it lands through a PR, because `merge-on-approval.yml` squashes with
+`--subject "<the PR title>"` and that title becomes the subject of the one
+commit that reaches `main`; **on the commit subject** when you push straight
+to `main`. A token left on a branch commit's subject ends up in the squash
+commit's body, where the scan does not look — the merge workflow refuses
+that merge rather than cutting a quiet patch.
 
 Pick the bump by what changes for **callers** of these reusable workflows:
 
@@ -925,8 +931,10 @@ Rule of thumb: if a caller's shim workflow could keep working untouched →
 patch or minor; if it couldn't → major. When unsure, prefer the larger bump.
 
 Note: the token match is a fixed-string search of the commit subject, so
-don't write `#major`/`#minor` verbatim in a commit message unless you mean
-it (e.g. say "the major token" rather than the literal string).
+don't write `#major`/`#minor` verbatim in a commit message or PR title
+unless you mean it (e.g. say "the major token" rather than the literal
+string). Commit *bodies* are excluded from the scan for exactly this
+reason — prose discussing a bump used to match itself and cut one.
 
 ## Extension publishing usage
 

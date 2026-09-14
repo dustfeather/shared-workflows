@@ -37,32 +37,31 @@ The repo uses GitHub Actions' floating major-tag convention:
   applies to the CURRENT major, so cutting a new one freezes the old tag
   where it stands.
 
-Bumps larger than a patch are requested with a token. **Put it in the PR
-title and on the commit subject.** Duplicating it is always safe — largest
-wins, and whichever copy is not used is simply ignored — and it saves you
-having to work out which one this particular merge will read.
+Bumps larger than a patch are requested with a token, and where it goes
+depends on how the change lands:
 
-The reason there are two places at all: PRs land with a squash merge, which
-produces one commit, and `tag-release.yml` reads tokens from commit
-subjects only — deliberately, so prose discussing a bump cannot cut one.
-Which text becomes that subject depends on the repo's
-`squash_merge_commit_title` setting and on how many commits the PR has:
+- **Through a PR → the PR title.** PRs land with a squash merge, and
+  `merge-on-approval.yml` passes `--subject "<the PR title>"`, so the PR
+  title *is* the subject of the single commit that reaches `main`.
+- **Pushed straight to `main` → the commit subject.** Nothing replays it,
+  so its own subject is the subject.
 
-| setting | PR has 1 commit | PR has 2+ commits |
-|---|---|---|
-| `COMMIT_OR_PR_TITLE` (GitHub's default, and ours) | that commit's subject | the PR title |
-| `PR_TITLE` | the PR title | the PR title |
+`tag-release.yml` reads tokens from commit subjects only — deliberately, so
+prose merely discussing a bump cannot cut one. A token left on a branch
+commit's subject therefore lands in the squash commit's *body*, where the
+scan is designed not to look. `merge-on-approval.yml` refuses such a merge
+rather than letting the release quietly degrade to a patch, and the fix it
+names is to edit the PR title: that needs no new commit, so the approving
+review still stands. Pushing another commit to carry the token does not
+work — its subject becomes body text too.
 
-So on a single-commit PR here the PR title is discarded and a token placed
-only there is lost; on a multi-commit PR the commit subjects become body
-text and a token placed only on one of those is lost. Putting it in both
-avoids the distinction entirely.
-
-`merge-on-approval.yml` resolves which text will become the subject and
-refuses the merge when the bump asked for anywhere is missing from it, so
-either mistake fails loudly rather than quietly. A commit pushed straight
-to `main` is unaffected — nothing replays it, so its own subject is the
-subject.
+The subject is passed explicitly rather than left to the repo's
+`squash_merge_commit_title` setting on purpose. GitHub's default there,
+`COMMIT_OR_PR_TITLE`, uses the commit's own subject on a single-commit PR
+and switches to the PR title only from two commits up. Without the flag the
+correct advice would depend on a per-repo setting nobody audits and on how
+many commits the PR happens to have, and the only rule that always held
+would be "put the token in both places".
 
 Patch = wording / comments / log-message tweaks.
 Minor = new optional input, new bot in default allowlist, new feature
