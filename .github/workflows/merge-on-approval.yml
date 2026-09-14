@@ -218,6 +218,29 @@ jobs:
           # guard-slice-begin
           if [ "$method" = "--squash" ]; then
             pr_title=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json title --jq '.title')
+            # Reduce the title to ONE line before anything else touches it.
+            #
+            # A commit subject is single-line by definition, so this is the
+            # semantics the rest of the step already assumes: `--subject` with
+            # an embedded newline makes git treat the remainder as the BODY,
+            # and tag-release.yml scans subjects only -- so a token below the
+            # first line would be read here and then land somewhere the release
+            # scan is designed not to look. Truncating makes the guard's view
+            # of the subject identical to what actually lands.
+            #
+            # It also closes a workflow-command injection. This value is echoed
+            # into the step log, and GitHub parses `::error::`/`::warning::` at
+            # the START OF A LINE in stdout -- so a newline in the title forges
+            # annotations on a step holding a write-scoped GH_TOKEN. MEASURED
+            # against the extracted guard: a title of `feat: y\n::error::SPOOFED`
+            # produced a real `::error::SPOOFED ANNOTATION (#42)` line in the
+            # output AND put it in the `--subject` argv. Whether GitHub accepts
+            # a newline in a PR title at all is a separate question; the guard
+            # does not need the answer to refuse to depend on it.
+            #
+            # Carriage returns go too: a lone CR rewrites the line in a terminal
+            # and would let a forged annotation hide the text it replaced.
+            pr_title=$(printf '%s' "$pr_title" | tr -d '\r' | head -n 1)
             # Subjects come from REST, NOT `gh pr view --json commits`. That
             # field is GraphQL `messageHeadline`, which returns GitHub's DISPLAY
             # form: measured on this PR, every subject longer than 72 characters

@@ -187,5 +187,25 @@ t "subject line is hedged, not asserted"           0 auto   --squash  "fix: y"  
   "!will land this subject"
 t "the merge-queue caveat is on the subject line"  0 auto   --squash  "fix: y"  "fix: y" \
   "a base branch behind a merge queue discards it"
+
+# A PR title is untrusted input and reaches BOTH the step log and the merge
+# argv. GitHub parses `::error::`/`::warning::` at the start of a line in
+# stdout, so a newline in the title forges annotations on a step holding a
+# write-scoped GH_TOKEN -- measured before the fix: the spoofed line appeared in
+# the output AND in the `--subject` argv. Truncating to one line also makes the
+# guard's view match what git actually lands, since `--subject` with a newline
+# sends the remainder to the commit BODY, where tag-release.yml does not look.
+inj=$(printf 'feat: y\n::error::SPOOFED ANNOTATION')
+t "a newline in the title cannot forge an annotation" 0 auto --squash "$inj" "feat: y" \
+  "!::error::SPOOFED"
+t "CONTROL: the forged line does not reach the argv" 0 auto --squash "$inj" "feat: y" \
+  "!argv:SPOOFED"
+t "only the first line of the title becomes the subject" 0 auto --squash "$inj" "feat: y" \
+  "argv:|--subject|feat: y (#42)|"
+# A lone CR rewrites the line in a terminal, which would let a forged
+# annotation overwrite the text it replaced.
+t "a CR in the title is stripped" 0 auto --squash "$(printf 'feat: y\r')" "feat: y" \
+  "argv:|--subject|feat: y (#42)|"
+
 echo "---- $pass passed, $fail failed ----"
 [ "$fail" = 0 ]
