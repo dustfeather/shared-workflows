@@ -208,6 +208,14 @@ jobs:
           # are not checked. Compare the EFFECTIVE bump rather than each token:
           # a `#minor` on a branch commit under a `#major` PR title is already
           # subsumed (largest wins), and failing on it would be noise.
+          #
+          # The two markers below delimit what tests/guard/extract.sh slices out.
+          # They exist so the slice never has to anchor on a line of the code
+          # under test: the `--squash` condition WAS the anchor, which made it
+          # the one line the suite could not mutate -- changing it deleted the
+          # anchor, the slice silently started somewhere else, and every case
+          # failed for an unrelated reason that looked like a strong signal.
+          # guard-slice-begin
           if [ "$method" = "--squash" ]; then
             pr_title=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json title --jq '.title')
             # Subjects come from REST, NOT `gh pr view --json commits`. That
@@ -511,6 +519,7 @@ jobs:
             gh pr merge --auto "${args[@]}" "$PR_URL" $del $match
           fi
 
+          # guard-slice-end
           # --- Close the PR's linked issues ourselves ----------------------
           # GitHub does NOT execute closing-keyword handling for a merge
           # performed with GITHUB_TOKEN. It still COMPUTES the link — but it

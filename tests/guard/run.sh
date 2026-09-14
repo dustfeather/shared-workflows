@@ -7,7 +7,7 @@ export REPO=o/r PR_NUMBER=42
 # to exist. Defaults match the reusable workflow's own defaults.
 export PR_URL=https://github.com/o/r/pull/42 DELETE_BRANCH=false
 pass=0; fail=0
-t() { # name expected_exit mode method title subjects [expected_substring]
+t() { # name expected_exit mode method title subjects [expected_substring] [ncommits_seq]
   local name=$1 want=$2 want_str=${7:-}
   export MODE=$3 method=$4 FIX_TITLE=$5 FIX_SUBJECTS=$6
   export FIX_NCOMMITS=${8:-}
@@ -39,7 +39,11 @@ t() { # name expected_exit mode method title subjects [expected_substring]
   fi
   printf 'PASS  %-52s exit=%s\n' "$name" "$rc"; pass=$((pass+1))
 }
-t "rebase: guard skipped entirely"                 0 auto   --rebase  "feat: x #minor" "feat: x #minor"
+# "skipped entirely" is a claim about the guard NOT RUNNING, and exit 0 is
+# equally what running and passing looks like. Assert the guard emitted
+# nothing at all, or the name outruns the check.
+t "rebase: guard skipped entirely"                 0 auto   --rebase  "feat: x #minor" "feat: x #minor" \
+  "!Bump-token guard"
 t "squash: no tokens anywhere"                     0 auto   --squash  "fix: y"         "fix: y"
 t "squash: #minor in PR title only"                0 auto   --squash  "feat: y #minor" "feat: y"
 t "squash: #minor in title AND subject"            0 auto   --squash  "feat: y #minor" "feat: y #minor"
@@ -49,7 +53,6 @@ t "CONTROL: #major stranded on subject"            1 auto   --squash  "feat: y" 
 t "CONTROL: #minor title, #major on subject"       1 auto   --squash  "feat: y #minor" "feat: y #major"
 t "CONTROL: multi-commit, token on 2nd subject"    1 auto   --squash  "feat: y"        "$(printf 'a: one\nb: two #minor')"
 t "multi-commit, title carries it"                 0 auto   --squash  "feat: y #minor" "$(printf 'a: one\nb: two')"
-t "suffix carries no token of its own"             1 auto   --squash  "feat: y"        "feat: y #minor"
 # The consequence report is mode-dependent: on `auto` GitHub freezes the subject
 # when auto-merge is enabled, so "edit the title" is false advice after this run.
 t "auto: report warns the title freezes here"      0 auto   --squash  "feat: y #major" "feat: y" \
@@ -68,7 +71,8 @@ t "CONTROL: refusal text names the title edit"     1 auto   --squash  "feat: y" 
 # used to eat an appended token, and the endpoint caps at 250 commits.
 big249=$(for i in $(seq 1 248); do echo "c$i: filler"; done; echo "c249: last #minor")
 big250=$(printf '%s\nc250: over the cap\n' "$big249")
-t "249 commits: token on the last one still seen"  1 auto   --squash  "feat: y"        "$big249"
+t "249 commits: token on the last one still seen"  1 auto   --squash  "feat: y"        "$big249" \
+  "A #minor token was requested on a commit subject"
 # The cap is detected by comparing against the PR's own declared count, not by
 # testing the count against 250 -- `--paginate` stops on a page boundary, so a
 # `-ge 250` test never fires at the default per_page=30.

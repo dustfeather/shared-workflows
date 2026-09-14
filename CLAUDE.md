@@ -1,10 +1,14 @@
 # CLAUDE.md
 
-Library of reusable GitHub Actions workflows (`workflow_call`) in `.github/workflows/`, consumed by every other repo under this account via `uses: dustfeather/shared-workflows/.github/workflows/<name>.yml@v6`. No app code. A merged change ships to every caller on next run — treat blast radius accordingly. Two exceptions, neither callable — this repo's own automation: `tag-release.yml` (cuts the version tag) and `pr-merge.yml` (lands a PR the review agent approved).
+Library of reusable GitHub Actions workflows (`workflow_call`) in `.github/workflows/`, consumed by every other repo under this account via `uses: dustfeather/shared-workflows/.github/workflows/<name>.yml@v6`. No app code. A merged change ships to every caller on next run — treat blast radius accordingly. Four workflows are NOT callable — this repo's own automation: `tag-release.yml` (cuts the version tag), `pr-merge.yml` (lands a PR the review agent approved), `pr-checks.yml` (runs the review) and `guard-tests.yml` (runs the guard suite below).
 
 ## Verifying changes
 
-No build/test; only local check = YAML parse (`python3 -c "import yaml; yaml.safe_load(...)"`). Reusable workflows cannot be invoked from local checkout — `uses:` resolves through GitHub. Real e2e test: push to feature branch, point one caller at it (`@feature/<name>`) before tagging.
+**Touching the bump-token guard in `merge-on-approval.yml` — the `run:` block from `if [ "$method" = "--squash" ]` down to the `gh pr merge` call — run `bash tests/guard/all.sh` before pushing.** It is the local check for that block and it is not optional: the guard sits in the one path with no retry, where a nonzero exit after the merge costs the release tag outright. The suite RE-EXTRACTS the block verbatim from the shipped YAML on every run, so it always tests the bytes that ship and cannot drift from an edit — but equally, an edit that breaks it fails immediately rather than at merge time. `guard-tests.yml` runs the same script on every push and pull request.
+
+Two suites, because a stubbed `gh` can only pattern-match argv and is therefore blind to a program passed INSIDE argv: `tests/guard/run.sh` covers the shell, `tests/guard/jqtest.sh` runs the `--jq` program against real jq. Assert on the recorded `gh pr merge` argv (the `argv:` prefix), not on the guard's own log lines — an `echo` survives deleting the flag it describes.
+
+Everything else: the only local check is a YAML parse (`python3 -c "import yaml; yaml.safe_load(...)"`) plus `scripts/check-workflows.py`, which the pre-push hook runs. Reusable workflows cannot be invoked from a local checkout — `uses:` resolves through GitHub. Real e2e test: push to feature branch, point one caller at it (`@feature/<name>`) before tagging.
 
 ## Versioning — pick bump by caller impact
 
