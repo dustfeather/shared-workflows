@@ -60,7 +60,7 @@ them and there is nothing to keep in sync.
 use the binaries baked into the image:
 
 ```yaml
-uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v5
+uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v6
 with:
   path-to-bun: /usr/local/bin/bun
   path-to-claude: /usr/local/bin/claude

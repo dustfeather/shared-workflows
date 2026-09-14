@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Library of reusable GitHub Actions workflows (`workflow_call`) in `.github/workflows/`, consumed by every other repo under this account via `uses: dustfeather/shared-workflows/.github/workflows/<name>.yml@v5`. No app code. A merged change ships to every caller on next run — treat blast radius accordingly. Two exceptions, neither callable — this repo's own automation: `tag-release.yml` (cuts the version tag) and `pr-merge.yml` (lands a PR the review agent approved).
+Library of reusable GitHub Actions workflows (`workflow_call`) in `.github/workflows/`, consumed by every other repo under this account via `uses: dustfeather/shared-workflows/.github/workflows/<name>.yml@v6`. No app code. A merged change ships to every caller on next run — treat blast radius accordingly. Two exceptions, neither callable — this repo's own automation: `tag-release.yml` (cuts the version tag) and `pr-merge.yml` (lands a PR the review agent approved).
 
 ## Verifying changes
 
@@ -8,7 +8,7 @@ No build/test; only local check = YAML parse (`python3 -c "import yaml; yaml.saf
 
 ## Versioning — pick bump by caller impact
 
-`tag-release.yml` auto-tags every push to `main`: default bumps **patch** (wraps at 100 → minor; minor uncapped), re-points the floating major tag (currently `v5`). **major never bumped automatically.** Larger bump: put `#minor` or `#major` **in the PR title** when it lands through a PR, **on the commit subject** when pushed straight to `main` (largest wins). Match is fixed-string over the **subject** of **every commit in the push**, not just HEAD — one push fires one run, so a HEAD-only scan would drop a token from an earlier commit in a batch. Bodies are excluded on purpose: prose *discussing* a bump matched itself and cut a spurious minor. Don't write tokens verbatim unless you mean them.
+`tag-release.yml` auto-tags every push to `main`: default bumps **patch** (wraps at 100 → minor; minor uncapped), re-points the floating major tag (currently `v6`). **major never bumped automatically.** Larger bump: put `#minor` or `#major` **in the PR title** when it lands through a PR, **on the commit subject** when pushed straight to `main` (largest wins). Match is fixed-string over the **subject** of **every commit in the push**, not just HEAD — one push fires one run, so a HEAD-only scan would drop a token from an earlier commit in a batch. Bodies are excluded on purpose: prose *discussing* a bump matched itself and cut a spurious minor. Don't write tokens verbatim unless you mean them.
 
 **PR title, since 2026-09-14**, when `pr-merge.yml` moved to `merge-method: squash` so main's history verifies (a rebase merge is replayed server-side and arrives unsigned; GitHub signs a squash commit with its web-flow key). A squash lands one commit, and `merge-on-approval.yml` passes `--subject "<the PR title>"` so that commit's subject is the PR title by construction. The flag is what makes the rule single-valued: without it the subject comes from the repo's `squash_merge_commit_title`, and GitHub's default `COMMIT_OR_PR_TITLE` uses the commit's own subject on a single-commit PR, switching to the PR title only from two commits up — so the advice would depend on a per-repo setting and on the commit count. The guard refuses a merge when a bump asked for anywhere is missing from the PR title; the fix it names is editing the title, which needs no new commit and so does not drop the approving review. A direct push to `main` is unaffected — nothing replays it.
 
@@ -42,13 +42,13 @@ Consequences a change here is most likely to get wrong:
   checks internally; keep it, because it stops pointless runs and keeps the
   intent next to the trigger, but do not mistake it for the thing preventing
   a `changes_requested` review from cutting a release.
-- **`pr-merge.yml` pins `@v5`, which lags this branch by one release.**
+- **`pr-merge.yml` pins `@v6`, which lags this branch by one release.**
   A `uses:` job validates inputs against the PINNED ref, not the PR. So a PR
   adding an input to a reusable workflow *and* passing it from this repo's own
   shim in one commit fails `Invalid input, <name> is not defined in the
   referenced workflow` — `startup_failure`, merge job never starts, PR cannot
   land itself. Merge it by hand, or split: ship the input, let `tag-release.yml`
-  move `v5`, then add the caller. The pin was `@v4` until 2026-09-13, which was
+  move `v6`, then add the caller. The pin was `@v4` until 2026-09-13, which was
   worse than "lags by one": `tag-release.yml` re-points only the CURRENT major,
   so the v5 cut froze v4 at v4.14.2 and the shim stopped receiving releases
   entirely. On the current major the lag self-heals at the next tag.
@@ -58,7 +58,7 @@ Consequences a change here is most likely to get wrong:
   skipped run, absent. No run means no review; no review means no approval; and
   `pr-merge.yml` triggers on `pull_request_review`. So such a PR cannot land
   itself, nothing goes red, and it sits waiting for CI that will never be
-  scheduled. **Push that file straight to `main`** — that is how the `@v4`→`@v5`
+  scheduled. **Push that file straight to `main`** — that is how the `@v4`→`@v6`
   pin bump shipped, and it is the only remedy. Bundling the edit with a change to
   another path looks like a second option and is not one: the run then exists, but
   `claude-code-action` rejects its OIDC exchange whenever the PR edits the

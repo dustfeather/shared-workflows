@@ -2,7 +2,7 @@
 
 This repo hosts reusable GitHub Actions workflows that are consumed by
 every other repo under this account via `uses:
-dustfeather/shared-workflows/.github/workflows/<name>.yml@v5`. A change
+dustfeather/shared-workflows/.github/workflows/<name>.yml@v6`. A change
 that lands here ships to every caller on their next workflow run. Treat
 the blast radius accordingly.
 
@@ -25,13 +25,13 @@ the blast radius accordingly.
 
 The repo uses GitHub Actions' floating major-tag convention:
 
-- `v5` — moving tag, the current major. `tag-release.yml` re-points it
+- `v6` — moving tag, the current major. `tag-release.yml` re-points it
   automatically on every push to `main`; nobody runs `git tag -f` by hand.
   Callers pin to this and pick up improvements on their next run.
 - `vX.Y.Z` — immutable per-commit tag, cut by the same workflow. Created
   for archaeology so the exact version a caller was on at any point in
   time can be reconstructed.
-- `v6` — only when an input/secret/permission becomes breaking, and only
+- `v7` — only when an input/secret/permission becomes breaking, and only
   deliberately: the major is never bumped automatically. New callers opt
   in by changing their `uses:` reference. Note that re-pointing only ever
   applies to the CURRENT major, so cutting a new one freezes the old tag
