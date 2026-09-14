@@ -53,7 +53,7 @@ Consequences a change here is most likely to get wrong:
   Within one major that lag self-heals at the next tag. ACROSS a major it does
   not: `tag-release.yml` re-points only the CURRENT major, so the v6 cut froze
   `v5` exactly as the v5 cut froze `v4` at v4.14.2. Until `pr-merge.yml` is
-  repointed to `@v6` by hand, this repo's own merges keep running frozen v5
+  repointed to `@v6` by hand (tracked in #43), this repo's own merges keep running frozen v5
   code — which means the explicit squash `--subject` described above is NOT in
   effect for this repo's merges, however plainly the rest of this file states
   it. Same for `pr-checks.yml`, which has the extra constraint below.

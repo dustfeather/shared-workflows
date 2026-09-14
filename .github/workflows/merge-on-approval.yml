@@ -219,7 +219,9 @@ jobs:
             # that backlink from every commit landing through this workflow, for
             # every caller. It cannot disturb the scan below — the bump match is
             # a fixed-string search anywhere in the subject.
-            squash_subject="$pr_title (#$PR_NUMBER)"
+            # Strip an existing suffix before appending, so a title copied from
+            # a `git log --oneline` line does not land as "... (#42) (#42)".
+            squash_subject="${pr_title%" (#$PR_NUMBER)"} (#$PR_NUMBER)"
 
             # The merge below passes `--subject "$squash_subject"`, so the landing
             # subject IS the PR title — by construction, not by prediction.
@@ -319,8 +321,15 @@ jobs:
           # and sets `CommitHeadline` on it before choosing the mutation; the
           # auto path then sends `EnablePullRequestAutoMergeInput{input}`, which
           # embeds that same struct. So `--auto` carries the headline too, and
-          # the guard's promise holds for `mode: auto` callers. Read out of
-          # cli/cli v2.55.0 `pkg/cmd/pr/merge/http.go`, not assumed.
+          # the guard's promise holds for `mode: auto` callers.
+          #
+          # Read out of cli/cli `pkg/cmd/pr/merge/http.go`, not assumed, and
+          # checked across releases rather than at one version: v2.0.0, v2.20.0,
+          # v2.40.0 and v2.55.0 all set `CommitHeadline` BEFORE branching on
+          # `auto`. The floor is therefore "any gh 2.x", which every runner
+          # exceeds, so a version check here would guard a case that cannot
+          # arise. If gh ever splits the two paths, this comment is the thing to
+          # re-check.
           args=("$method")
           if [ "$method" = "--squash" ]; then
             args+=(--subject "$squash_subject")
