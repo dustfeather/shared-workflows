@@ -8,3 +8,13 @@ scratchpad/
 
 # Stale leftover from the CI-only code-review-graph build.
 .code-review-graph/
+
+# Build artifact, anchored to the ROOT only. `tests/guard/extract.sh` writes the
+# extracted guard to `tests/guard/guard.sh` (excluded by the .gitignore next to
+# it); a copy at the root can only come from running that extraction by hand in
+# the wrong directory, which is how one got committed in 9dc7b0f. Nothing reads
+# a root copy, so it could only go stale against merge-on-approval.yml and be
+# trusted anyway -- the exact failure `all.sh` re-extracts on every run to avoid.
+# The leading slash matters: it must not shadow tests/guard/guard.sh, which is a
+# real path the suite writes and reads.
+/guard.sh
