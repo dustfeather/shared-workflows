@@ -138,7 +138,7 @@ jobs:
     if: github.event.action != 'closed'
     permissions: { contents: read }
     uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v6
-    # every gate is on by default in v5; opt out per gate, e.g.
+    # every gate is on by default; opt out per gate, e.g.
     # with:
     #   run-build: false
   review:

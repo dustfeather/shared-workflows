@@ -55,6 +55,18 @@ names is to edit the PR title: that needs no new commit, so the approving
 review still stands. Pushing another commit to carry the token does not
 work — its subject becomes body text too.
 
+**The mirror hazard, and why it matters more now.** Because the PR title is
+always the landing subject, a bump token written there *incidentally* — quoting
+an error message, naming the convention in prose, describing what a change does
+— cuts that release for real. `tag-release.yml` excludes commit bodies for
+exactly this reason: prose discussing a bump once matched itself and cut a
+spurious minor. A PR title has no equivalent exclusion, because under this
+convention it is the only channel the token can travel on, so an incidental
+token and an intended one are identical text and nothing can tell them apart.
+Write "the major token" rather than the literal string unless you mean it. The
+merge log states which release the merge will cut before it lands, so check it
+if a title mentions versioning at all.
+
 The subject is passed explicitly rather than left to the repo's
 `squash_merge_commit_title` setting on purpose. GitHub's default there,
 `COMMIT_OR_PR_TITLE`, uses the commit's own subject on a single-commit PR
