@@ -212,7 +212,16 @@ jobs:
             pr_title=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json title --jq '.title')
             pr_subjects=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json commits --jq '.commits[].messageHeadline')
 
-            # The merge below passes `--subject "$pr_title"`, so the landing
+            # `--subject` replaces GitHub's own squash-title composition
+            # wholesale, and that composition appends "(#<number>)". Reproduce
+            # the suffix rather than inherit it: `git log --oneline` and the
+            # blame UI key the PR backlink off it, so dropping it would strip
+            # that backlink from every commit landing through this workflow, for
+            # every caller. It cannot disturb the scan below — the bump match is
+            # a fixed-string search anywhere in the subject.
+            squash_subject="$pr_title (#$PR_NUMBER)"
+
+            # The merge below passes `--subject "$squash_subject"`, so the landing
             # subject IS the PR title — by construction, not by prediction.
             #
             # That is the whole reason the flag is passed. Left off, the subject
@@ -235,7 +244,7 @@ jobs:
             # scalar and break the file (caught by the YAML parse, but only after
             # the fact).
             asked_text=$(printf '%s\n%s' "$pr_title" "$pr_subjects")
-            title_rank=$(bump_rank "$pr_title")
+            title_rank=$(bump_rank "$squash_subject")
             asked_rank=$(bump_rank "$asked_text")
 
             if [ "$title_rank" -lt "$asked_rank" ]; then
@@ -283,12 +292,20 @@ jobs:
           # GitHub and returns — so a nonzero exit means auto-merge was not
           # enabled, nothing landed, and there is no tag or close to strand.
           # Failing is the correct outcome on that path.
+
           # Assembled as an array: `--subject` carries a PR title with spaces in
           # it, while the unquoted `$del $match` below depend on word splitting
           # and so cannot hold one. Never empty, which keeps `set -u` happy.
+          #
+          # The subject reaches BOTH paths. gh builds one `MergePullRequestInput`
+          # and sets `CommitHeadline` on it before choosing the mutation; the
+          # auto path then sends `EnablePullRequestAutoMergeInput{input}`, which
+          # embeds that same struct. So `--auto` carries the headline too, and
+          # the guard's promise holds for `mode: auto` callers. Read out of
+          # cli/cli v2.55.0 `pkg/cmd/pr/merge/http.go`, not assumed.
           args=("$method")
           if [ "$method" = "--squash" ]; then
-            args+=(--subject "$pr_title")
+            args+=(--subject "$squash_subject")
           fi
 
           merge_rc=0
