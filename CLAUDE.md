@@ -42,23 +42,28 @@ Consequences a change here is most likely to get wrong:
   checks internally; keep it, because it stops pointless runs and keeps the
   intent next to the trigger, but do not mistake it for the thing preventing
   a `changes_requested` review from cutting a release.
-- **`pr-merge.yml` pins `@v6`, which lags this branch by one release.**
+- **`pr-merge.yml` pins `@v5` while this branch ships `v6`, so that pin is
+  FROZEN, not lagging.**
   A `uses:` job validates inputs against the PINNED ref, not the PR. So a PR
   adding an input to a reusable workflow *and* passing it from this repo's own
   shim in one commit fails `Invalid input, <name> is not defined in the
   referenced workflow` — `startup_failure`, merge job never starts, PR cannot
   land itself. Merge it by hand, or split: ship the input, let `tag-release.yml`
-  move `v6`, then add the caller. The pin was `@v4` until 2026-09-13, which was
-  worse than "lags by one": `tag-release.yml` re-points only the CURRENT major,
-  so the v5 cut froze v4 at v4.14.2 and the shim stopped receiving releases
-  entirely. On the current major the lag self-heals at the next tag.
+  move the major tag, then add the caller.
+  Within one major that lag self-heals at the next tag. ACROSS a major it does
+  not: `tag-release.yml` re-points only the CURRENT major, so the v6 cut froze
+  `v5` exactly as the v5 cut froze `v4` at v4.14.2. Until `pr-merge.yml` is
+  repointed to `@v6` by hand, this repo's own merges keep running frozen v5
+  code — which means the explicit squash `--subject` described above is NOT in
+  effect for this repo's merges, however plainly the rest of this file states
+  it. Same for `pr-checks.yml`, which has the extra constraint below.
 - **`pr-checks.yml` names ITSELF in its own `paths-ignore`.** A PR whose only
   changed file is `.github/workflows/pr-checks.yml` changes a non-empty set of
   files, every one of them excluded, so GitHub creates **no run object** — not a
   skipped run, absent. No run means no review; no review means no approval; and
   `pr-merge.yml` triggers on `pull_request_review`. So such a PR cannot land
   itself, nothing goes red, and it sits waiting for CI that will never be
-  scheduled. **Push that file straight to `main`** — that is how the `@v4`→`@v6`
+  scheduled. **Push that file straight to `main`** — that is how the `@v4`→`@v5`
   pin bump shipped, and it is the only remedy. Bundling the edit with a change to
   another path looks like a second option and is not one: the run then exists, but
   `claude-code-action` rejects its OIDC exchange whenever the PR edits the
