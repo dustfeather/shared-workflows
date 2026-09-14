@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # Static checks for the reusable workflows, run before anything leaves the
-# machine. There is no build and no test suite in this repo, and a reusable
-# workflow cannot be invoked from a local checkout — `uses:` only resolves
-# through GitHub — so without this the first feedback on a mistake is a failed
-# run in someone else's repo, and for two of the checked failure modes that run
-# has zero jobs, no logs and no annotation.
+# machine. There is no build in this repo and a reusable workflow cannot be
+# invoked from a local checkout — `uses:` only resolves through GitHub — so
+# without this the first feedback on a mistake is a failed run in someone
+# else's repo, and for two of the checked failure modes that run has zero jobs,
+# no logs and no annotation.
+#
+# Two independent checks. Each probes for its OWN dependencies and skips only
+# itself: an earlier bare exit on a missing PyYAML used to take the whole hook
+# with it, which would have meant the check CLAUDE.md calls mandatory was the
+# one a missing unrelated dependency silently dropped.
 #
 # Enable once per clone:   git config core.hooksPath .githooks
 # Bypass deliberately:     git push --no-verify
@@ -13,22 +18,53 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
+failed=0
+
+# --- 1. workflow contract checks (python3 + PyYAML) ------------------------
 if ! command -v python3 >/dev/null 2>&1; then
   echo "pre-push: python3 not found — skipping workflow checks" >&2
-  exit 0
-fi
-
-if ! python3 -c 'import yaml' 2>/dev/null; then
+elif ! python3 -c 'import yaml' 2>/dev/null; then
   echo "pre-push: PyYAML not installed — skipping workflow checks" >&2
   echo "pre-push: install it with 'pip install --user pyyaml' to enable them" >&2
-  exit 0
+else
+  echo "pre-push: checking workflows"
+  if ! python3 scripts/check-workflows.py; then
+    echo >&2
+    echo "pre-push: workflow checks failed — push aborted." >&2
+    echo "pre-push: these break every caller, so fix before pushing." >&2
+    failed=1
+  fi
 fi
 
-echo "pre-push: checking workflows"
-if ! python3 scripts/check-workflows.py; then
+# --- 2. bump-token guard suite (python3 + jq) ------------------------------
+# CLAUDE.md calls this mandatory before pushing a change to the guard, and for
+# a while nothing local enforced it — the one check declared non-optional was
+# the one the hook did not run. `guard-tests.yml` catches it in CI either way;
+# this makes the failure arrive before the push rather than after it.
+#
+# Runs on every push, not only when the guard changed: the suite re-extracts
+# the block from the shipped YAML on each run, so it is the cheap way to catch
+# an edit that moved the slice markers from anywhere else in the tree.
+if [ ! -f tests/guard/all.sh ]; then
+  : # suite absent on this ref (e.g. pushing an older branch) — nothing to run
+elif ! command -v python3 >/dev/null 2>&1; then
+  echo "pre-push: python3 not found — skipping guard suite" >&2
+elif ! command -v jq >/dev/null 2>&1; then
+  echo "pre-push: jq not found — skipping guard suite" >&2
+  echo "pre-push: install it with 'sudo apt-get install -y jq' to enable it" >&2
+else
+  echo "pre-push: running the bump-token guard suite"
+  if ! bash tests/guard/all.sh; then
+    echo >&2
+    echo "pre-push: guard suite failed — push aborted." >&2
+    echo "pre-push: this guard runs on the one path with no retry, where a" >&2
+    echo "pre-push: nonzero exit after the merge costs the release tag." >&2
+    failed=1
+  fi
+fi
+
+if [ "$failed" != 0 ]; then
   echo >&2
-  echo "pre-push: workflow checks failed — push aborted." >&2
-  echo "pre-push: these break every caller, so fix before pushing." >&2
-  echo "pre-push: override with 'git push --no-verify' if you are certain." >&2
+  echo "pre-push: override deliberately if you are certain." >&2
   exit 1
 fi
