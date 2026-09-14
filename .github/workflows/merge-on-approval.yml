@@ -457,11 +457,22 @@ jobs:
           # it, while the unquoted `$del $match` below depend on word splitting
           # and so cannot hold one. Never empty, which keeps `set -u` happy.
           #
-          # The subject reaches BOTH paths. gh builds one `MergePullRequestInput`
-          # and sets `CommitHeadline` on it before choosing the mutation; the
-          # auto path then sends `EnablePullRequestAutoMergeInput{input}`, which
-          # embeds that same struct. So `--auto` carries the headline too, and
-          # the guard's promise holds for `mode: auto` callers.
+          # The subject reaches BOTH paths, and on `auto` -- the default -- it
+          # survives all the way to the merge. MEASURED end to end on a
+          # throwaway repo, not argued from source: enabling auto-merge with
+          # `--subject "STORED HEADLINE probe (#1)"` put that exact string in
+          # `autoMergeRequest.commitHeadline`; editing the PR title afterwards
+          # left commitHeadline untouched; and when the blocking check went
+          # green the landed squash commit read `STORED HEADLINE probe (#1)`,
+          # not the original title and not the edited one. So the guard's
+          # promise holds for `mode: auto` callers, and the freeze CLAUDE.md
+          # describes is the observed behaviour rather than an inference.
+          #
+          # The mechanism, for whoever has to re-check this: gh builds one
+          # `MergePullRequestInput` and sets `CommitHeadline` on it before
+          # choosing the mutation; the auto path then sends
+          # `EnablePullRequestAutoMergeInput{input}`, which embeds that same
+          # struct.
           #
           # Read out of cli/cli `pkg/cmd/pr/merge/http.go`, not assumed, and
           # checked across releases rather than at one version: v2.0.0, v2.20.0,
