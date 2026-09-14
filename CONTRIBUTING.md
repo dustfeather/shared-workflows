@@ -38,17 +38,31 @@ The repo uses GitHub Actions' floating major-tag convention:
   where it stands.
 
 Bumps larger than a patch are requested with a token. **Put it in the PR
-title, not a commit message.** PRs are landed with a squash merge, which
-makes the PR title the subject of the commit that reaches `main` and moves
-the original commit subjects into the body — and `tag-release.yml` scans
-subjects only, deliberately, so that prose discussing a bump cannot cut
-one. A token left on a commit subject would therefore be silently ignored
-and the release would come out a patch.
+title and on the commit subject.** Duplicating it is always safe — largest
+wins, and whichever copy is not used is simply ignored — and it saves you
+having to work out which one this particular merge will read.
 
-`merge-on-approval.yml` refuses the merge when a commit subject asks for a
-bigger bump than the PR title does, so this fails loudly rather than
-quietly. A commit pushed straight to `main` still carries its token on its
-own subject, since nothing replays it.
+The reason there are two places at all: PRs land with a squash merge, which
+produces one commit, and `tag-release.yml` reads tokens from commit
+subjects only — deliberately, so prose discussing a bump cannot cut one.
+Which text becomes that subject depends on the repo's
+`squash_merge_commit_title` setting and on how many commits the PR has:
+
+| setting | PR has 1 commit | PR has 2+ commits |
+|---|---|---|
+| `COMMIT_OR_PR_TITLE` (GitHub's default, and ours) | that commit's subject | the PR title |
+| `PR_TITLE` | the PR title | the PR title |
+
+So on a single-commit PR here the PR title is discarded and a token placed
+only there is lost; on a multi-commit PR the commit subjects become body
+text and a token placed only on one of those is lost. Putting it in both
+avoids the distinction entirely.
+
+`merge-on-approval.yml` resolves which text will become the subject and
+refuses the merge when the bump asked for anywhere is missing from it, so
+either mistake fails loudly rather than quietly. A commit pushed straight
+to `main` is unaffected — nothing replays it, so its own subject is the
+subject.
 
 Patch = wording / comments / log-message tweaks.
 Minor = new optional input, new bot in default allowlist, new feature

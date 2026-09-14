@@ -214,39 +214,61 @@ jobs:
             pr_commits=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json commits --jq '.commits | length')
             squash_title_src=$(gh api "/repos/$REPO" --jq '.squash_merge_commit_title')
 
-            # "The squash subject is the PR title" is true only conditionally, and
-            # the exception is exactly the one that would make this guard's first
-            # visible act a false alarm. `COMMIT_OR_PR_TITLE` — GitHub's default —
-            # names both sources because it uses THE COMMIT's title when the PR has
-            # a single commit, and the PR title only from two commits up. So a
-            # one-commit PR on a default-configured repo carries its token through
-            # the squash untouched and must not be refused.
+            # A squash lands ONE commit, and tag-release.yml reads bump tokens
+            # (`#minor`/`#major`) from commit SUBJECTS only — deliberately, since
+            # a body that merely discusses a bump matches itself. So the only
+            # question that matters is whether the subject this merge is about to
+            # produce still carries the bump somebody asked for.
+            #
+            # Which text becomes that subject is not constant, and getting it
+            # backwards is easy: `COMMIT_OR_PR_TITLE`, GitHub's default, names
+            # both sources because it uses THE COMMIT's subject when the PR has a
+            # single commit, and the PR title only from two commits up. So the
+            # advice "put the token in the PR title" is right for a multi-commit
+            # PR and WRONG for a single-commit one, where the title is discarded.
+            #
+            # Rather than special-case either, resolve the landing subject first
+            # and compare ranks once. That catches both directions of the mistake
+            # — a token stranded on a commit subject that is about to become body
+            # text, and a token stranded in a PR title that is about to be
+            # discarded — with one rule and no exemption to keep in sync.
             if [ "$pr_commits" = 1 ] && [ "$squash_title_src" = COMMIT_OR_PR_TITLE ]; then
-              echo "Bump-token guard: single-commit PR under COMMIT_OR_PR_TITLE — the commit subject becomes the squash subject, so a token on it survives. Nothing to check."
+              landing_subject="$pr_subjects"
+              landing_desc="the single commit's subject (COMMIT_OR_PR_TITLE)"
+              put_it="on that commit's subject"
             else
-              # Compare the EFFECTIVE bump rather than each token: largest wins, so
-              # a #minor on a branch commit under a #major PR title is already
-              # subsumed, and failing on it is noise that trains people to ignore
-              # the guard.
-              bump_rank() {
-                case "$1" in
-                  *'#major'*) echo 2 ;;
-                  *'#minor'*) echo 1 ;;
-                  *)          echo 0 ;;
-                esac
-              }
-              subject_rank=$(bump_rank "$pr_subjects")
-              title_rank=$(bump_rank "$pr_title")
-              if [ "$subject_rank" -gt "$title_rank" ]; then
-                case "$subject_rank" in
-                  2) lost='#major' ;;
-                  *) lost='#minor' ;;
-                esac
-                echo "::error::A ${lost} token is on a commit subject but not in the PR title. Squashing would move it into the commit body, where tag-release.yml does not look, and the release would be cut as a patch instead. Put ${lost} in the PR title — it becomes the squash commit's subject — then re-run this workflow."
-                exit 1
-              fi
-              echo "Bump-token guard: the PR title carries at least the bump its commit subjects ask for."
+              landing_subject="$pr_title"
+              landing_desc="the PR title"
+              put_it="in the PR title"
             fi
+
+            # Largest wins, matching tag-release.yml, so ranks compare directly
+            # and a #minor under a #major is already subsumed rather than flagged.
+            bump_rank() {
+              case "$1" in
+                *'#major'*) echo 2 ;;
+                *'#minor'*) echo 1 ;;
+                *)          echo 0 ;;
+              esac
+            }
+            # Join with printf rather than an inline literal newline: a
+            # continuation line at column 0 would terminate this `run: |` block
+            # scalar and break the file (caught by the YAML parse, but only after
+            # the fact).
+            asked_text=$(printf '%s\n%s' "$pr_title" "$pr_subjects")
+            landing_rank=$(bump_rank "$landing_subject")
+            asked_rank=$(bump_rank "$asked_text")
+
+            echo "Bump-token guard: squash subject will be ${landing_desc}."
+            if [ "$landing_rank" -lt "$asked_rank" ]; then
+              case "$asked_rank" in
+                2) asked='#major' ;;
+                *) asked='#minor' ;;
+              esac
+              echo "::error::A ${asked} token was requested, but it is not on the text that becomes this squash commit's subject — that will be ${landing_desc}. tag-release.yml reads subjects only, so the token would land in the commit body and the release would be cut as a patch instead. Put ${asked} ${put_it} and re-run. Putting it in both places is always safe: largest wins, and whichever copy is not used is simply ignored."
+              exit 1
+            fi
+            echo "Bump-token guard: the landing subject carries the bump that was asked for."
           fi
 
           del=""
