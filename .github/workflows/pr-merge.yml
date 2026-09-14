@@ -87,10 +87,15 @@ jobs:
       # an empty `--log-failed`. Granting it in the same change as the bump is
       # the ordering that breaks. Keep that shape for any future scope.
       issues: write
-    # `@v5`, floating, not a pinned `@v5.1.0`. Every other caller of this repo
-    # tracks the floating major, and this shim is the one that merges the
-    # commits those releases are cut from — pinning it exactly would make this
-    # repo's own automation the only thing not exercising what it ships.
+    # `@v5`, and as of the v6 cut this pin is FROZEN, not floating. It did
+    # track the moving major, and the reasoning for that was: every other
+    # caller tracks the floating major, and this shim is the one that merges
+    # the commits those releases are cut from, so pinning it exactly would
+    # make this repo's own automation the only thing not exercising what it
+    # ships. That reasoning INVERTS once the tag stops moving — a frozen `@v5`
+    # is now precisely the "not exercising what it ships" case it was meant to
+    # avoid, and it is why the bump-token guard and the squash `--subject` are
+    # not in effect for this repo's own merges. Repointing to `@v6` is #43.
     #
     # `@v4` is FROZEN at v4.14.2 and predates the close block entirely:
     # tag-release.yml re-points only the CURRENT major, so the v5 cut stranded

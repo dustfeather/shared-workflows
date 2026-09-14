@@ -43,6 +43,20 @@ depends on how the change lands:
 - **Through a PR → the PR title.** PRs land with a squash merge, and
   `merge-on-approval.yml` passes `--subject "<the PR title>"`, so the PR
   title *is* the subject of the single commit that reaches `main`.
+
+  **Not yet true in this repo itself, and the exception is silent.**
+  `pr-merge.yml` is pinned to `@v5`, which has no bump-token guard at all and
+  passes no `--subject` — it merges with a bare
+  `gh pr merge "$PR_URL" "$method"`. The subject is therefore composed by
+  GitHub from `squash_merge_commit_title`, and on the default
+  `COMMIT_OR_PR_TITLE` a **single-commit** PR lands the commit's own subject,
+  switching to the PR title only from two commits up. So a one-commit PR
+  titled `add X input #minor` whose commit subject is `add X input` lands
+  `add X input`, `tag-release.yml` finds no token, and a patch is cut where a
+  minor was asked for — with nothing checking, because the guard that would
+  refuse this ships in v6 and `pr-merge.yml` does not run it yet.
+  **Until `pr-merge.yml` is repointed to `@v6` (#43), put the token in BOTH
+  the PR title and the head commit subject when working in this repo.**
 - **Pushed straight to `main` → the commit subject.** Nothing replays it,
   so its own subject is the subject.
 
