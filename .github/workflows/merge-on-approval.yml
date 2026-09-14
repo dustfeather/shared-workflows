@@ -373,7 +373,16 @@ jobs:
                 2) asked='#major' ;;
                 *) asked='#minor' ;;
               esac
-              echo "::error::A ${asked} token was requested on a commit subject, but this squash lands ONE commit whose subject is the PR TITLE. tag-release.yml reads subjects only, so the token would end up in the commit body where the scan is designed not to look, and the release would be cut as a patch. Fix: edit the PR title to contain ${asked}, then re-run. Editing the title needs no new commit, so the approving review still stands. Pushing another commit to carry the token does NOT work — its subject becomes body text too."
+              # Name BOTH remedies, and which one applies. The refusal cannot
+              # tell an intended token from an incidental one -- a subject like
+              # `docs: explain the #minor token` trips it with no bump meant --
+              # and naming only the title edit turns this message into the
+              # mirror hazard the block below describes: follow it when the
+              # token was incidental and the title, which is always the landing
+              # subject, cuts a release nobody asked for. The second remedy
+              # costs an approving review, so it has to say so rather than
+              # leave the author to discover it after the force-push.
+              echo "::error::A ${asked} token was requested on a commit subject, but this squash lands ONE commit whose subject is the PR TITLE. tag-release.yml reads subjects only, so the token would end up in the commit body where the scan is designed not to look, and the release would be cut as a patch. There are two fixes and this guard cannot tell which you need, because an intended token and an incidental one are identical text. If you DID mean the bump: edit the PR title to contain ${asked}, then re-run -- that needs no new commit, so the approving review still stands. If the token was INCIDENTAL, prose merely naming ${asked} rather than asking for it: do NOT copy it into the title, because the title is always the landing subject and that cuts a ${asked} release nobody asked for -- reword the commit subject instead, which means a force-push and a re-requested review. Either way, pushing an ADDITIONAL commit to carry the token does NOT work: its subject becomes body text too."
               exit 1
             fi
             # Always say what this merge will cut, not only when a bump was

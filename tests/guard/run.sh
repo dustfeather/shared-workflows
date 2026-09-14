@@ -100,7 +100,18 @@ t "direct, #minor title: the annotation fires here too" 0 direct --squash "feat:
 t "direct: does NOT claim the title is still live"  0 direct --squash  "fix: y"         "fix: y" \
   "!still changes what lands"
 t "CONTROL: refusal text names the title edit"     1 auto   --squash  "feat: y"        "feat: y #major" \
-  "Fix: edit the PR title to contain #major, then re-run."
+  "If you DID mean the bump: edit the PR title to contain #major, then re-run"
+# The refusal cannot distinguish an intended token from prose naming one, so a
+# message offering only the title edit is advice that cuts an unwanted release
+# whenever the guess is wrong -- the same mirror hazard the guard logs about
+# below. The second remedy costs the approving review, which the message has to
+# state: an author who discovers that after the force-push has already paid it.
+t "refusal names the incidental case too"          1 auto   --squash  "feat: y"        "feat: y #major" \
+  "do NOT copy it into the title, because the title is always the landing subject"
+t "refusal prices the force-push remedy"           1 auto   --squash  "feat: y"        "feat: y #minor" \
+  "reword the commit subject instead, which means a force-push and a re-requested review"
+t "CONTROL: refusal does not offer the title edit alone" 1 auto --squash "feat: y"      "feat: y #major" \
+  "!Fix: edit the PR title to contain #major, then re-run."
 # The commit list is read from REST now: truncation of GraphQL messageHeadline
 # used to eat an appended token, and the endpoint caps at 250 commits.
 big249=$(for i in $(seq 1 248); do echo "c$i: filler"; done; echo "c249: last #minor")
