@@ -364,7 +364,15 @@ jobs:
             # A human auditing this log for an incidental token, or checking
             # that the "(#N)" de-duplication above produced the right text, has
             # nothing to read otherwise.
-            echo "Bump-token guard: the squash will land this subject: ${squash_subject}"
+            # "would land", not "will land". The one configuration this guard
+            # cannot control is a base branch behind a MERGE QUEUE, which
+            # discards the subject passed here and composes its own (see the
+            # note above). No caller uses one, so there is nothing to detect
+            # today and a detection call that can never fire is worse than none
+            # -- but a log line that states the outcome as fact would be
+            # confidently wrong in exactly that case, and a wrong log is worse
+            # than a hedged one. The hedge costs a word.
+            echo "Bump-token guard: this squash would land the subject: ${squash_subject} (a base branch behind a merge queue discards it and composes its own; no caller uses one)"
             case "$title_rank" in
               2) cuts="MAJOR release (major token found in the PR title)" ;;
               1) cuts="MINOR release (minor token found in the PR title)" ;;
