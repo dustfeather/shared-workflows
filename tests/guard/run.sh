@@ -94,6 +94,17 @@ t "CONTROL: below-cap shortfall does not assert the cap" 1 auto --squash "feat: 
   "!was most likely truncated" "3 3"
 t "a stable count past the cap names truncation"   1 auto   --squash  "feat: y" "$(printf 'a: one\nb: two')" \
   "781 is past the 250-commit cap on the pull-request commit list, so the read was most likely truncated there" "781 781"
+# `squash_subject` strips an existing " (#N)" before appending its own, because
+# a title copied off a `git log --oneline` line already carries one. No fixture
+# above has the suffix, so the strip was unbound: delete the `%` expansion and
+# every case stayed green while the subject landed as "... (#42) (#42)". The
+# positive assertion is a substring match and passes against the doubled text
+# too, so the negative control is the half that actually binds it.
+t "an existing (#N) suffix is not doubled"         0 auto   --squash  "feat: y #minor (#42)" "feat: y" \
+  "argv:--subject feat: y #minor (#42)"
+t "CONTROL: the suffix is not appended twice"      0 auto   --squash  "feat: y #minor (#42)" "feat: y" \
+  "!argv:(#42) (#42)"
+
 # The guard's PROMISE is the flag on the merge call, not the echo above it.
 # These assert the recorded argv: delete `args+=(--subject "$squash_subject")`
 # and every echo-based case stays green while these four go red.

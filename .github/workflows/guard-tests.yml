@@ -26,7 +26,7 @@ jobs:
   guard:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Extract the guard from the YAML and run both suites
         # Both suites re-extract before running, so this can never pass against
         # a stale copy. run.sh covers the shell against a stubbed `gh` that
