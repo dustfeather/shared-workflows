@@ -1,7 +1,8 @@
-# Local scratch: throwaway harnesses, one-shot rollout scripts, PR drafts.
-# This repo ships only reusable workflows, so none of that belongs on main —
-# a committed test suite no CI step runs is false confidence, and a one-shot
-# rollout script is correct exactly once. Keep such things outside the tree.
+# Local scratch: one-shot rollout scripts, PR drafts, throwaway probes.
+# A one-shot rollout script is correct exactly once, so it does not belong on
+# main. Reusable TESTS do — they live in tests/ and CI runs them (see #44);
+# excluding them would make the guard's correctness unreproducible by anyone
+# but its author, which is the thing this rule was originally, wrongly, used for.
 scratchpad/
 
 # Stale leftover from the CI-only code-review-graph build.

@@ -266,13 +266,28 @@ jobs:
             # exactly 250. So the two sides legitimately disagree past the cap and
             # the refusal below fires there instead of failing open. Any shortfall,
             # from the cap or a failed page, refuses.
-            # Two reads, so the head can move between them. A push landing
-            # after the commit list is fetched makes the declared count larger
-            # and the mismatch would be blamed on the 250 cap, which is a wrong
-            # diagnosis for a reachable event -- this workflow ships
-            # `match-head-commit` precisely because heads move mid-merge. Re-read
-            # on mismatch and let the two readings name the cause: a count that
-            # changed under us is a moving head, a count that did not is the cap.
+            # Three reads across two endpoints, so the head can move between any
+            # of them, and the refusal must not name a cause it cannot know.
+            #
+            # The re-read below catches ONE of the two orderings: a push landing
+            # between the declared-count read and the re-read changes the count
+            # under us, and the two readings name it a moving head. The MIRROR
+            # ordering is invisible to it -- a push landing between the commit
+            # list and the declared-count read leaves declared and recheck equal
+            # (both post-push) while the subjects are pre-push, so the shortfall
+            # looks exactly like truncation on a PR that may have twenty commits.
+            # That is the same wrong diagnosis the re-read exists to prevent,
+            # pointing the other way.
+            #
+            # `declared_commits` is what separates them, because it is not capped
+            # -- measured above at 780 against a 250-item listing. A PR at or
+            # below 250 could have had every commit returned, so the cap cannot
+            # explain a shortfall there, and the message says so instead of
+            # asserting truncation. Note the direction of the dependency: 250
+            # picks WORDING here, never whether to refuse. The refusal is already
+            # decided by the count mismatch above, so if GitHub ever moves the
+            # cap the worst outcome is a message that hedges the wrong way.
+            #
             # This narrows the race rather than closing it; the merge itself is
             # what closes it, via `--match-head-commit` when the caller sets it.
             declared_commits=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.commits')
@@ -283,7 +298,12 @@ jobs:
                 echo "::error::The head of #${PR_NUMBER} moved while this guard was reading it: the commit count went from ${declared_commits} to ${recheck_commits} between two reads, and the ${n_commits} subjects scanned are from before that. A bump token on a commit that arrived mid-read would be invisible here, so this merge is refused. Re-run once the branch has settled; set match-head-commit if you want the merge itself to refuse a moved head."
                 exit 1
               fi
-              echo "::error::PR #${PR_NUMBER} declares ${declared_commits} commits but only ${n_commits} subjects could be read (the pull-request commit list caps at 250). A bump token on an unread commit would be invisible here, so this merge is refused rather than scanned from an incomplete list. Check the subjects by hand and merge manually, or split the PR."
+              if [ "$declared_commits" -gt 250 ]; then
+                cause="${declared_commits} is past the 250-commit cap on the pull-request commit list, so the read was most likely truncated there -- though a push landing between the two reads produces the same shortfall"
+              else
+                cause="${declared_commits} is within the 250-commit cap on that list, so truncation does not explain this: either a push landed between the commit read and the count read, or a page of the listing failed"
+              fi
+              echo "::error::PR #${PR_NUMBER} declares ${declared_commits} commits but only ${n_commits} subjects could be read -- ${cause}. A bump token on an unread commit would be invisible here, so this merge is refused rather than scanned from an incomplete list. Re-run; if it repeats, check the subjects by hand and merge manually, or split the PR."
               exit 1
             fi
 
@@ -436,10 +456,25 @@ jobs:
           # Read out of cli/cli `pkg/cmd/pr/merge/http.go`, not assumed, and
           # checked across releases rather than at one version: v2.0.0, v2.20.0,
           # v2.40.0 and v2.55.0 all set `CommitHeadline` BEFORE branching on
-          # `auto`. The floor is therefore "any gh 2.x", which every runner
-          # exceeds, so a version check here would guard a case that cannot
-          # arise. If gh ever splits the two paths, this comment is the thing to
+          # `auto`. If gh ever splits the two paths, this comment is the thing to
           # re-check.
+          #
+          # That evidence bounds the PAYLOAD FIELD, not the CLI flag, and the two
+          # have different floors -- do not read the paragraph above as licensing
+          # "any gh 2.x" for `--subject` itself. The flag's own floor, measured in
+          # cli/cli history: `gh pr merge -t/--subject` first shipped in **v2.4.0**
+          # (commit f2d23d8c88845b8cf94a54130baa9fd5531e8801, "Allow editing commit
+          # subject when squash-merging a PR"; absent from the v2.3.0 tree, present
+          # in v2.4.0 at pkg/cmd/pr/merge/merge.go). `-t` and `--subject` are one
+          # `StringVarP` call, so there is no separate short-form floor.
+          #
+          # Worth pinning because of where an unknown flag lands, which is not
+          # symmetric: on `auto` -- the DEFAULT mode -- the bare `gh pr merge
+          # --auto` below is unguarded and the step fails for that caller, while
+          # `direct` swallows the same failure into "It may still have merged".
+          # v2.4.0 is from 2021 and GitHub-hosted and ARC runners are far past it,
+          # so this cannot bite today; the floor is recorded so the next reader
+          # inherits a checked number instead of a plausible one.
           args=("$method")
           if [ "$method" = "--squash" ]; then
             args+=(--subject "$squash_subject")

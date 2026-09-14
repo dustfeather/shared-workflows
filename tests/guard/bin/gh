@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Deliberately incomplete: patterns exist ONLY for the calls the guard should
+# make, so a green suite also proves the old GraphQL `--json commits` read is
+# gone rather than merely unused.
+#
+# Before answering anything, assert the HTTP METHOD the real CLI would use.
+# `gh api` defaults to GET only while no parameters are supplied; one `-f`/`-F`
+# flips the default to POST, which 404s on a read route and, under
+# `set -euo pipefail`, kills the step. A stub that just returns canned output
+# cannot see that -- it answers the same whatever the method -- so check the
+# argv shape instead. This is the one test that would have caught it.
+case " $* " in
+  *" -f "*|*" -F "*|*" --field "*|*" --raw-field "*)
+    case " $* " in
+      *" -X "*|*" --method "*) ;;
+      *) echo "gh api with -f/-F and no -X: the real CLI would POST this: $*" >&2; exit 98 ;;
+    esac ;;
+esac
+case "$*" in
+  *"--json title"*)   echo "$FIX_TITLE" ;;
+  *"/commits"*)       printf '%s\n' "$FIX_SUBJECTS" ;;
+  *"pulls/"*)         # FIX_NCOMMITS may hold SEVERAL values, one per call, so a
+                      # test can make the head appear to move between the two
+                      # reads. Falls back to the fixture's own line count.
+                      set -- ${FIX_NCOMMITS:-$(printf '%s' "$FIX_SUBJECTS" | grep -c '')}
+                      i=$(cat "${NC_SEQ:-/dev/null}" 2>/dev/null || echo 0); i=$((i+1))
+                      [ -n "${NC_SEQ:-}" ] && echo "$i" > "$NC_SEQ"
+                      [ "$i" -le "$#" ] || i=$#
+                      eval "echo \${$i}" ;;
+  *) echo "UNEXPECTED gh call: $*" >&2; exit 99 ;;
+esac
