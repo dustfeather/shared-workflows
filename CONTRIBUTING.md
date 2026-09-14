@@ -93,9 +93,13 @@ shortfall.
 
 The refusal is deliberate and it has no opt-out input, which means the
 automation simply cannot land such a PR: **merge it by hand, or split it into
-smaller ones.** The same comparison also fires when a pagination page fails or
-a push lands mid-read, and the message says which of those it can rule out, so
-read it before assuming the commit count is the cause. It exits before
+smaller ones.** The message distinguishes three causes — the head shrank
+between the reads, truncation at the 250 cap, or a push landing between the
+commit read and the count read — so read it before assuming the commit count is
+the cause. A pagination page that failed outright is NOT one of them, however
+natural it looks in that list: the subjects come from a command substitution,
+so under `set -euo pipefail` a nonzero `gh api` kills the step before the
+comparison is ever reached. It exits before
 `gh pr merge` is called, so a refusal can never strand a merged-but-untagged
 commit — the failure mode it is most important not to have.
 

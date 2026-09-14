@@ -932,10 +932,12 @@ deciding a release from a partial list.
 
 **There is no opt-out input.** The refusal cannot be switched off from a
 caller's shim; the remedy is to **merge that PR by hand, or split it**. The
-same check also catches a page that failed outright and a push that lands
-mid-read, and the error message names which of those it can rule out. If you
-maintain a long-running integration branch that accumulates hundreds of
-commits, expect to land it manually.
+message names which of three causes it can rule out: the head shrank between
+the two reads (a force-push or a base rebase), truncation at the 250 cap, or a
+push landing between the commit read and the count read. A page that failed
+outright is not one of them — a nonzero `gh api` exits the step before the
+comparison happens. If you maintain a long-running integration branch that
+accumulates hundreds of commits, expect to land it manually.
 
 Pick the bump by what changes for **callers** of these reusable workflows:
 
