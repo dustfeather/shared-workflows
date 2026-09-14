@@ -1,9 +1,0 @@
-#!/usr/bin/env bash
-# Deliberately incomplete: patterns exist ONLY for the two calls the guard
-# should make. A green suite therefore also proves the old GraphQL
-# `--json commits` read is gone, not merely unused.
-case "$*" in
-  *"--json title"*)   echo "$FIX_TITLE" ;;
-  *"/commits"*)       printf '%s\n' "$FIX_SUBJECTS" ;;
-  *) echo "UNEXPECTED gh call: $*" >&2; exit 99 ;;
-esac

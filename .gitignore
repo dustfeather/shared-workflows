@@ -1,0 +1,8 @@
+# Local scratch: throwaway harnesses, one-shot rollout scripts, PR drafts.
+# This repo ships only reusable workflows, so none of that belongs on main —
+# a committed test suite no CI step runs is false confidence, and a one-shot
+# rollout script is correct exactly once. Keep such things outside the tree.
+scratchpad/
+
+# Stale leftover from the CI-only code-review-graph build.
+.code-review-graph/
