@@ -6,13 +6,28 @@ export REPO=o/r PR_NUMBER=42
 # The slice now runs through `gh pr merge`, so the inputs that call reads have
 # to exist. Defaults match the reusable workflow's own defaults.
 export PR_URL=https://github.com/o/r/pull/42 DELETE_BRANCH=false
+# One run-scoped dir instead of two mktemp files per case: `all.sh` is the
+# documented pre-push check, so a contributor runs it repeatedly and 2N stray
+# files per run accumulate in their /tmp. A `trap ... EXIT` inside t() would
+# never fire -- the function returns, it does not exit -- so the trap belongs
+# here, at script scope.
+#
+# The trap is safe to hang on EXIT because no failure path needs the files
+# afterwards: both `return`s in t() print "$out" first, and for an "argv:"
+# assertion "$out" IS the recorded argv. The evidence reaches stdout while the
+# case is still running, so a red run explains itself without the dir.
+TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 pass=0; fail=0
 t() { # name expected_exit mode method title subjects [expected_substring] [ncommits_seq]
   local name=$1 want=$2 want_str=${7:-}
   export MODE=$3 method=$4 FIX_TITLE=$5 FIX_SUBJECTS=$6
   export FIX_NCOMMITS=${8:-}
-  NC_SEQ=$(mktemp); export NC_SEQ
-  MERGE_ARGV=$(mktemp); export MERGE_ARGV
+  # Truncate both per case. Reusing the paths without this would carry the
+  # PREVIOUS case's recorded argv into any case whose guard exits before the
+  # merge -- the stub only writes MERGE_ARGV when `gh pr merge` is reached --
+  # and every negative argv assertion would then be asserting on stale bytes.
+  NC_SEQ="$TMPD/nc"; MERGE_ARGV="$TMPD/argv"; export NC_SEQ MERGE_ARGV
+  : > "$NC_SEQ"; : > "$MERGE_ARGV"
   out=$(bash "$D/guard.sh" 2>&1); rc=$?
   # Assertions may target the recorded merge argv instead of the guard's own
   # output, by prefixing the expected substring with "argv:". The guard's echo
@@ -72,8 +87,16 @@ t "auto, #minor title: the annotation is still raised" 0 auto --squash "feat: y 
   "::warning::Bump-token guard: this merge will cut a MINOR release"
 t "direct: plain line, title still editable"       0 direct --squash  "feat: y #minor" "feat: y" \
   "Bump-token guard: this merge will cut a MINOR release (minor token found in the PR title). The subject was captured at the top of this step, so editing the PR title from now on does not change this release"
-t "direct: no ::warning:: on the direct path"      0 direct --squash  "fix: y"         "fix: y" \
+t "direct, no token: no ::warning::"               0 direct --squash  "fix: y"         "fix: y" \
   "!::warning::"
+# The annotation is gated on the RANK, not on the mode: an incidental token
+# cuts an unasked-for release on `direct` too, just sooner. Without this case
+# nothing binds that -- the rank-0 case above passes whether or not `direct`
+# can annotate at all, and "direct: plain line, title still editable" asserts a
+# substring starting at "Bump-token guard:", which still matches when a
+# `::warning::` is prefixed.
+t "direct, #minor title: the annotation fires here too" 0 direct --squash "feat: y #minor" "feat: y" \
+  "::warning::Bump-token guard: this merge will cut a MINOR release"
 t "direct: does NOT claim the title is still live"  0 direct --squash  "fix: y"         "fix: y" \
   "!still changes what lands"
 t "CONTROL: refusal text names the title edit"     1 auto   --squash  "feat: y"        "feat: y #major" \

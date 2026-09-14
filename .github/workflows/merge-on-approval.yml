@@ -440,9 +440,20 @@ jobs:
             # one it would drown is the rank-nonzero case, the only one where
             # a release gets cut that nobody asked for. So escalate there and
             # log plainly otherwise: same words, same log, no yellow.
+            #
+            # The annotation fires on BOTH modes, though the two wordings
+            # differ. The rank gate and the mode split answer different
+            # questions: an incidental token cutting an unasked-for release is
+            # mode-independent -- `direct` cuts it just as hard, only sooner --
+            # while the wording is about the second hazard, a title edited
+            # after this read, whose window is what the mode governs. Gating
+            # the annotation on the mode as well would exempt exactly the
+            # wrong repo: this one's `pr-merge.yml` passes `direct`, and a
+            # workflow library is where PR titles are likeliest to discuss
+            # bump tokens in prose.
             if [ "$title_rank" = "0" ]; then ann=""; else ann="::warning::"; fi
             if [ "$MODE" = "direct" ]; then
-              echo "Bump-token guard: this merge will cut a ${cuts}. The subject was captured at the top of this step, so editing the PR title from now on does not change this release; re-run to change it. On this mode the merge follows within seconds, so that window is short."
+              echo "${ann}Bump-token guard: this merge will cut a ${cuts}. The subject was captured at the top of this step, so editing the PR title from now on does not change this release; re-run to change it. On this mode the merge follows within seconds, so that window is short."
             else
               echo "${ann}Bump-token guard: this merge will cut a ${cuts}. The subject was captured at the top of this step, so editing the PR title from now on changes NOTHING about the release this cuts. Mode is '${MODE}', so the merge may not happen for a long time yet — GitHub stores the subject when auto-merge is enabled below and does not re-read the title when it finally merges, so the wait does not give the title back. To change it: edit the title, then re-run this workflow, which needs a fresh approving review or a manual dispatch."
             fi
