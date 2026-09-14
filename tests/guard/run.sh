@@ -95,7 +95,7 @@ t "CONTROL: head moved mid-read names the head"    1 auto   --squash  "feat: y" 
 # returned everything, so truncation cannot be the cause and the message must
 # not claim it. Both arms still exit 1; only the wording differs.
 t "a stable count below the cap rules truncation out" 1 auto --squash  "feat: y" "$(printf 'a: one\nb: two')" \
-  "3 is within the 250-commit cap on that list, so truncation does not explain this" "3 3"
+  "3 is within the 250-commit cap on that list, so truncation does not explain this either" "3 3"
 t "CONTROL: below-cap shortfall does not assert the cap" 1 auto --squash "feat: y" "$(printf 'a: one\nb: two')" \
   "!was most likely truncated" "3 3"
 t "a stable count past the cap names truncation"   1 auto   --squash  "feat: y" "$(printf 'a: one\nb: two')" \

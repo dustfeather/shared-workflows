@@ -272,8 +272,14 @@ jobs:
             # object and carries the TRUE total -- measured on NixOS/nixpkgs#560469,
             # where `.commits` is 780 while the paginated commits listing returns
             # exactly 250. So the two sides legitimately disagree past the cap and
-            # the refusal below fires there instead of failing open. Any shortfall,
-            # from the cap or a failed page, refuses.
+            # the refusal below fires there instead of failing open.
+            #
+            # A failed PAGE is not among the causes this can see, though it is
+            # tempting to list: `pr_subjects` is assigned from a command
+            # substitution, and under the `set -euo pipefail` at the top of this
+            # step a nonzero `gh api` kills the step outright, so a dropped page
+            # never reaches the comparison. What reaches it is truncation at the
+            # cap and a head that moved between the reads -- nothing else.
             # Three reads across two endpoints, so the head can move between any
             # of them, and the refusal must not name a cause it cannot know.
             #
@@ -319,7 +325,7 @@ jobs:
               elif [ "$declared_commits" -gt 250 ]; then
                 cause="${declared_commits} is past the 250-commit cap on the pull-request commit list, so the read was most likely truncated there -- though a push landing between the two reads produces the same shortfall"
               else
-                cause="${declared_commits} is within the 250-commit cap on that list, so truncation does not explain this: either a push landed between the commit read and the count read, or a page of the listing failed"
+                cause="${declared_commits} is within the 250-commit cap on that list, so truncation does not explain this either -- what is left is a push landing between the commit read and the count read"
               fi
               echo "::error::PR #${PR_NUMBER} declares ${declared_commits} commits and ${n_commits} subjects were read -- ${cause}. A bump token on a commit this guard did not scan would be invisible here, so this merge is refused rather than decided from a list that does not match the PR. Re-run; if it repeats, check the subjects by hand and merge manually, or split the PR."
               exit 1
