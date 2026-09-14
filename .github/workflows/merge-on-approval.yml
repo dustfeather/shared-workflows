@@ -269,13 +269,33 @@ jobs:
             # are identical text and no check can separate them.
             #
             # So the guard does the one thing that is actually available --
-            # state the consequence in the log, before the merge, where it is
-            # still free to fix by editing the title.
+            # state the consequence in the log, before the merge.
+            #
+            # How long that log stays actionable depends on MODE, and the
+            # difference is not cosmetic. GraphQL's `AutoMergeRequest` carries
+            # `commitHeadline` alongside `enabledAt`: the subject is STORED when
+            # auto-merge is enabled, not recomputed when GitHub finally merges.
+            # On `mode: auto` -- the DEFAULT -- the title therefore stops
+            # mattering a few steps below this one, and a title edit made after
+            # that changes nothing about the release that gets cut. Saying
+            # "still free to fix by editing the title" would be false on the
+            # path most callers are on.
+            #
+            # Known bound, both modes: `commitHeadline` is documented as IGNORED
+            # when the base branch merges through a MERGE QUEUE, which hands the
+            # subject back to GitHub's own composition and voids the control
+            # this guard rests on. No caller uses one today; a caller that
+            # adopts one needs this guard to grow a check for it.
             case "$title_rank" in
-              2) echo "Bump-token guard: this merge will cut a MAJOR release (major token found in the PR title)." ;;
-              1) echo "Bump-token guard: this merge will cut a MINOR release (minor token found in the PR title)." ;;
-              *) echo "Bump-token guard: this merge will cut a PATCH release (no bump token in the PR title)." ;;
+              2) cuts="MAJOR release (major token found in the PR title)" ;;
+              1) cuts="MINOR release (minor token found in the PR title)" ;;
+              *) cuts="PATCH release (no bump token in the PR title)" ;;
             esac
+            if [ "$MODE" = "direct" ]; then
+              echo "Bump-token guard: this merge will cut a ${cuts}. The merge runs later in this same job, so editing the PR title before it does still changes what lands."
+            else
+              echo "::warning::Bump-token guard: this merge will cut a ${cuts}. Mode is '${MODE}', so the subject is handed to GitHub's auto-merge a few steps below and frozen there — editing the PR title after this run changes NOTHING about the release this cuts. To change it: edit the title, then re-run this workflow, which needs a fresh approving review or a manual dispatch."
+            fi
           fi
 
           del=""
