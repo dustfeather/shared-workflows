@@ -298,12 +298,22 @@ jobs:
                 echo "::error::The head of #${PR_NUMBER} moved while this guard was reading it: the commit count went from ${declared_commits} to ${recheck_commits} between two reads, and the ${n_commits} subjects scanned are from before that. A bump token on a commit that arrived mid-read would be invisible here, so this merge is refused. Re-run once the branch has settled; set match-head-commit if you want the merge itself to refuse a moved head."
                 exit 1
               fi
-              if [ "$declared_commits" -gt 250 ]; then
+              # Both directions are reachable, and only one of them is a short
+              # read. Commits can be REMOVED between the two reads as well as
+              # added -- a force-push or a base rebase -- which leaves MORE
+              # subjects in hand than the PR now declares. The recheck above
+              # does not catch it unless the count moves a second time, so
+              # without this arm the message reports "declares 3 but only 5
+              # could be read" and hangs a cap diagnosis off it. Refusing is
+              # right either way; the diagnosis is what has to stop guessing.
+              if [ "$n_commits" -gt "$declared_commits" ]; then
+                cause="that is MORE subjects than the PR declares, so the head shrank between the two reads -- a force-push or a base rebase dropped commits after the list was fetched. The subjects in hand are from before that, and the cap plays no part in it"
+              elif [ "$declared_commits" -gt 250 ]; then
                 cause="${declared_commits} is past the 250-commit cap on the pull-request commit list, so the read was most likely truncated there -- though a push landing between the two reads produces the same shortfall"
               else
                 cause="${declared_commits} is within the 250-commit cap on that list, so truncation does not explain this: either a push landed between the commit read and the count read, or a page of the listing failed"
               fi
-              echo "::error::PR #${PR_NUMBER} declares ${declared_commits} commits but only ${n_commits} subjects could be read -- ${cause}. A bump token on an unread commit would be invisible here, so this merge is refused rather than scanned from an incomplete list. Re-run; if it repeats, check the subjects by hand and merge manually, or split the PR."
+              echo "::error::PR #${PR_NUMBER} declares ${declared_commits} commits and ${n_commits} subjects were read -- ${cause}. A bump token on a commit this guard did not scan would be invisible here, so this merge is refused rather than decided from a list that does not match the PR. Re-run; if it repeats, check the subjects by hand and merge manually, or split the PR."
               exit 1
             fi
 

@@ -73,9 +73,9 @@ t "249 commits: token on the last one still seen"  1 auto   --squash  "feat: y" 
 # testing the count against 250 -- `--paginate` stops on a page boundary, so a
 # `-ge 250` test never fires at the default per_page=30.
 t "CONTROL: short read vs declared count refuses"  1 auto   --squash  "feat: y #major" "$big250" \
-  "::error::PR #42 declares 260 commits but only 250 subjects could be read" 260
+  "::error::PR #42 declares 260 commits and 250 subjects were read" 260
 t "CONTROL: one commit short still refuses"        1 auto   --squash  "fix: y"         "$big249" \
-  "declares 250 commits but only 249 subjects could be read" 250
+  "declares 250 commits and 249 subjects were read" 250
 t "a long subject is NOT truncated by this guard"  1 auto   --squash  "feat: y" \
   "fix(merge-on-approval): a subject long enough that messageHeadline would clip it #minor"
 t "log prints the landing subject verbatim"        0 auto   --squash  "feat: y #minor" "feat: y" \
@@ -106,6 +106,17 @@ t "an existing (#N) suffix is not doubled"         0 auto   --squash  "feat: y #
   "argv:|--subject|feat: y #minor (#42)|"
 t "CONTROL: the suffix is not appended twice"      0 auto   --squash  "feat: y #minor (#42)" "feat: y" \
   "!argv:(#42) (#42)"
+
+# The mismatch is not always a SHORTFALL. A force-push or a base rebase between
+# the two reads drops commits, leaving more subjects in hand than the PR now
+# declares -- and the recheck only fires if the count moves a second time. The
+# old wording said "declares 1 but only 2 could be read" and then hung a cap
+# diagnosis on it, which is doubly wrong: nothing was truncated and nothing was
+# short.
+t "more subjects than declared names the shrink"   1 auto   --squash  "feat: y" "$(printf 'a: one\nb: two')" \
+  "that is MORE subjects than the PR declares, so the head shrank between the two reads" "1 1"
+t "CONTROL: an over-read does not blame the cap"   1 auto   --squash  "feat: y" "$(printf 'a: one\nb: two')" \
+  "!cap on that list" "1 1"
 
 # The guard's PROMISE is the flag on the merge call, not the echo above it.
 # These assert the recorded argv: delete `args+=(--subject "$squash_subject")`
