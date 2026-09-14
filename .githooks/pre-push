@@ -65,6 +65,6 @@ fi
 
 if [ "$failed" != 0 ]; then
   echo >&2
-  echo "pre-push: override deliberately if you are certain." >&2
+  echo "pre-push: override with 'git push --no-verify' if you are certain." >&2
   exit 1
 fi
