@@ -1,0 +1,15 @@
+      - uses: actions/checkout@v5
+      - uses: azure/setup-helm@v5
+      - uses: azure/setup-kubectl@v5
+      - uses: actions/setup-node@v5
+    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v5
+    uses: dustfeather/shared-workflows/.github/workflows/deploy-k8s.yml@v5
+    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v5
+    uses: dustfeather/shared-workflows/.github/workflows/dependabot-auto-merge.yml@v5
+    uses: dustfeather/shared-workflows/.github/workflows/deploy-cloudflare.yml@v5
+    uses: dustfeather/shared-workflows/.github/workflows/release-extension.yml@v5
+    uses: dustfeather/shared-workflows/.github/workflows/publish-firefox.yml@v5
+#     uses: dustfeather/shared-workflows/.github/workflows/build-push-image.yml@v5
+    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v4
+    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v5.2.1
+    uses: ITGuys-RO/other-repo/.github/workflows/thing.yml@v5

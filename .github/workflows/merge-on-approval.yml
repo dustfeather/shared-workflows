@@ -210,7 +210,30 @@ jobs:
           # subsumed (largest wins), and failing on it would be noise.
           if [ "$method" = "--squash" ]; then
             pr_title=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json title --jq '.title')
-            pr_subjects=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json commits --jq '.commits[].messageHeadline')
+            # Subjects come from REST, NOT `gh pr view --json commits`. That
+            # field is GraphQL `messageHeadline`, which GitHub truncates around
+            # 72 characters (69 plus an ellipsis), and the bump token is
+            # conventionally APPENDED to the subject -- so truncation eats
+            # precisely the substring this scan searches for. The guard would
+            # then read "no bump token asked for", allow the merge, and the
+            # release would degrade to a patch with nothing in the log to say
+            # why. Three commits on this very branch are long enough to trip it.
+            #
+            # REST returns the raw message, so take its first line: bodies stay
+            # excluded, which is the rule tag-release.yml itself scans by (prose
+            # discussing a bump matched itself and cut a spurious minor).
+            pr_subjects=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/commits" \
+              --jq '.[].commit.message | split("\n")[0] | sub("\r$";"")')
+
+            # That endpoint caps at 250 commits however far it is paginated. A
+            # token on commit 251 would be invisible, which is the exact silent
+            # failure this guard exists to prevent, so refuse rather than scan a
+            # list known to be incomplete.
+            n_commits=$(printf '%s' "$pr_subjects" | grep -c '' || true)
+            if [ "$n_commits" -ge 250 ]; then
+              echo "::error::PR #${PR_NUMBER} reports ${n_commits} commits and the pull-request commit list caps at 250, so a bump token on a later commit cannot be seen from here. Check the subjects by hand and merge manually, or split the PR."
+              exit 1
+            fi
 
             # `--subject` replaces GitHub's own squash-title composition
             # wholesale, and that composition appends "(#<number>)". Reproduce
@@ -286,6 +309,11 @@ jobs:
             # subject back to GitHub's own composition and voids the control
             # this guard rests on. No caller uses one today; a caller that
             # adopts one needs this guard to grow a check for it.
+            # Print the landing subject itself, not only the bump it implies.
+            # A human auditing this log for an incidental token, or checking
+            # that the "(#N)" de-duplication above produced the right text, has
+            # nothing to read otherwise.
+            echo "Bump-token guard: the squash will land this subject: ${squash_subject}"
             case "$title_rank" in
               2) cuts="MAJOR release (major token found in the PR title)" ;;
               1) cuts="MINOR release (minor token found in the PR title)" ;;
