@@ -16,12 +16,24 @@ case " $* " in
       *) echo "gh api with -f/-F and no -X: the real CLI would POST this: $*" >&2; exit 98 ;;
     esac ;;
 esac
-# `pr merge` is the call the guard exists to shape, so record its argv verbatim
-# for the suite to assert on. Asserting the guard's own echo instead proves only
-# that the echo is still there -- the flag can be deleted without moving it.
+# `pr merge` is the call the guard exists to shape, so record its argv for the
+# suite to assert on. Asserting the guard's own echo instead proves only that the
+# echo is still there -- the flag can be deleted without moving it.
+#
+# Record "$@" with an explicit delimiter, NOT "$*". `$*` joins on a space, which
+# destroys the argument boundaries before the suite ever sees them -- and a lost
+# boundary is exactly the regression the `args=()` array exists to prevent.
+# Unquote the append to `args+=(--subject $squash_subject)` and gh really
+# receives --subject, feat:, y, #minor, (#42), setting the subject to "feat:" and
+# passing the rest as stray positionals; under `$*` the recording renders
+# identically to the correct call and every case stays green. Pipes make each
+# boundary visible to a plain substring assertion.
 case "$1" in
   pr) if [ "$2" = "merge" ]; then
-        [ -n "${MERGE_ARGV:-}" ] && printf '%s\n' "$*" > "$MERGE_ARGV"
+        if [ -n "${MERGE_ARGV:-}" ]; then
+          printf '|' > "$MERGE_ARGV"
+          printf '%s|' "$@" >> "$MERGE_ARGV"
+        fi
         exit 0
       fi ;;
 esac

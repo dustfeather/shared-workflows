@@ -16,7 +16,9 @@ t() { # name expected_exit mode method title subjects [expected_substring]
   out=$(bash "$D/guard.sh" 2>&1); rc=$?
   # Assertions may target the recorded merge argv instead of the guard's own
   # output, by prefixing the expected substring with "argv:". The guard's echo
-  # survives deleting the flag; the argv does not.
+  # survives deleting the flag; the argv does not. The recording is
+  # pipe-delimited, so write the expected form with its own pipes and a lost
+  # argument boundary turns the case red.
   case "$want_str" in "argv:"*|"!argv:"*)
     merge_argv=$(cat "$MERGE_ARGV" 2>/dev/null || true)
     out="merge-argv: ${merge_argv}"
@@ -101,7 +103,7 @@ t "a stable count past the cap names truncation"   1 auto   --squash  "feat: y" 
 # positive assertion is a substring match and passes against the doubled text
 # too, so the negative control is the half that actually binds it.
 t "an existing (#N) suffix is not doubled"         0 auto   --squash  "feat: y #minor (#42)" "feat: y" \
-  "argv:--subject feat: y #minor (#42)"
+  "argv:|--subject|feat: y #minor (#42)|"
 t "CONTROL: the suffix is not appended twice"      0 auto   --squash  "feat: y #minor (#42)" "feat: y" \
   "!argv:(#42) (#42)"
 
@@ -109,15 +111,15 @@ t "CONTROL: the suffix is not appended twice"      0 auto   --squash  "feat: y #
 # These assert the recorded argv: delete `args+=(--subject "$squash_subject")`
 # and every echo-based case stays green while these four go red.
 t "squash: --subject reaches the merge argv"       0 auto   --squash  "feat: y #minor" "feat: y" \
-  "argv:--subject feat: y #minor (#42)"
+  "argv:|--subject|feat: y #minor (#42)|"
 t "squash: the subject rides on the auto path too" 0 auto   --squash  "fix: y"        "fix: y" \
-  "argv:pr merge --auto --squash --subject fix: y (#42)"
+  "argv:|pr|merge|--auto|--squash|--subject|fix: y (#42)|"
 t "direct mode passes the same subject"            0 direct --squash  "fix: y"        "fix: y" \
-  "argv:--squash --subject fix: y (#42)"
+  "argv:|--squash|--subject|fix: y (#42)|"
 # The flag belongs to squash alone: a rebase merge has no subject to set, and
 # passing one would be a hard error from the real CLI.
 t "CONTROL: rebase carries no --subject"           0 auto   --rebase  "feat: y #minor" "feat: y" \
-  "!argv:--subject"
+  "!argv:|--subject|"
 
 # The subject line must not state the landing subject as settled fact: a base
 # branch behind a merge queue discards it, and this guard cannot detect that.
