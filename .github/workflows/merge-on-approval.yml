@@ -425,10 +425,26 @@ jobs:
               1) cuts="MINOR release (minor token found in the PR title)" ;;
               *) cuts="PATCH release (no bump token in the PR title)" ;;
             esac
+            # The ANNOTATION is gated; the message is not. Two different
+            # hazards share this line, and only one of them scales with the
+            # annotation:
+            #   - an incidental token in the title cutting a release nobody
+            #     asked for. Can only happen when `title_rank` is nonzero.
+            #   - a title edited after this read, which changes nothing. Can
+            #     happen at any rank, and is most likely at rank 0, where the
+            #     author has not written a token yet.
+            # The second is why the text is printed unconditionally. But a
+            # `::warning::` on EVERY squash merge -- and `auto` is the default,
+            # so that is every merge in every caller repo -- makes a clean run
+            # render yellow, which is how an annotation stops being read. The
+            # one it would drown is the rank-nonzero case, the only one where
+            # a release gets cut that nobody asked for. So escalate there and
+            # log plainly otherwise: same words, same log, no yellow.
+            if [ "$title_rank" = "0" ]; then ann=""; else ann="::warning::"; fi
             if [ "$MODE" = "direct" ]; then
               echo "Bump-token guard: this merge will cut a ${cuts}. The subject was captured at the top of this step, so editing the PR title from now on does not change this release; re-run to change it. On this mode the merge follows within seconds, so that window is short."
             else
-              echo "::warning::Bump-token guard: this merge will cut a ${cuts}. The subject was captured at the top of this step, so editing the PR title from now on changes NOTHING about the release this cuts. Mode is '${MODE}', so the merge may not happen for a long time yet — GitHub stores the subject when auto-merge is enabled below and does not re-read the title when it finally merges, so the wait does not give the title back. To change it: edit the title, then re-run this workflow, which needs a fresh approving review or a manual dispatch."
+              echo "${ann}Bump-token guard: this merge will cut a ${cuts}. The subject was captured at the top of this step, so editing the PR title from now on changes NOTHING about the release this cuts. Mode is '${MODE}', so the merge may not happen for a long time yet — GitHub stores the subject when auto-merge is enabled below and does not re-read the title when it finally merges, so the wait does not give the title back. To change it: edit the title, then re-run this workflow, which needs a fresh approving review or a manual dispatch."
             fi
           fi
 

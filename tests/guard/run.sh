@@ -59,6 +59,17 @@ t "auto: report warns the title freezes here"      0 auto   --squash  "feat: y #
   "::warning::Bump-token guard: this merge will cut a MAJOR release (major token found in the PR title). The subject was captured at the top of this step"
 t "auto: re-run is named as the remedy"            0 auto   --squash  "fix: y"         "fix: y" \
   "re-run this workflow, which needs a fresh approving review"
+# The ANNOTATION is gated on a token actually being in the title; the message is
+# not -- the case above asserts the text still prints at rank 0. `auto` is the
+# default, so an ungated `::warning::` paints every merge in every caller repo
+# yellow, and the one worth reading (an incidental token cutting a release
+# nobody asked for, which needs a nonzero rank) drowns in it. Both arms of the
+# gate are bound: absent at rank 0, present at rank 1 -- rank 1 because a gate
+# mistyped as `= "2"` would still pass the rank-2 case above.
+t "auto, no token: the freeze note carries no ::warning::" 0 auto --squash "fix: y" "fix: y" \
+  "!::warning::"
+t "auto, #minor title: the annotation is still raised" 0 auto --squash "feat: y #minor" "feat: y #minor" \
+  "::warning::Bump-token guard: this merge will cut a MINOR release"
 t "direct: plain line, title still editable"       0 direct --squash  "feat: y #minor" "feat: y" \
   "Bump-token guard: this merge will cut a MINOR release (minor token found in the PR title). The subject was captured at the top of this step, so editing the PR title from now on does not change this release"
 t "direct: no ::warning:: on the direct path"      0 direct --squash  "fix: y"         "fix: y" \
