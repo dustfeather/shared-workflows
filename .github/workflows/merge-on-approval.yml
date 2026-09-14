@@ -263,9 +263,23 @@ jobs:
             # declared commit count instead, which is a plain integer on the PR
             # object and is not capped. Any shortfall, from the cap or a failed
             # page, refuses.
+            # Two reads, so the head can move between them. A push landing
+            # after the commit list is fetched makes the declared count larger
+            # and the mismatch would be blamed on the 250 cap, which is a wrong
+            # diagnosis for a reachable event -- this workflow ships
+            # `match-head-commit` precisely because heads move mid-merge. Re-read
+            # on mismatch and let the two readings name the cause: a count that
+            # changed under us is a moving head, a count that did not is the cap.
+            # This narrows the race rather than closing it; the merge itself is
+            # what closes it, via `--match-head-commit` when the caller sets it.
             declared_commits=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.commits')
             n_commits=$(printf '%s' "$pr_subjects" | grep -c '' || true)
             if [ "$n_commits" -ne "$declared_commits" ]; then
+              recheck_commits=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.commits')
+              if [ "$recheck_commits" -ne "$declared_commits" ]; then
+                echo "::error::The head of #${PR_NUMBER} moved while this guard was reading it: the commit count went from ${declared_commits} to ${recheck_commits} between two reads, and the ${n_commits} subjects scanned are from before that. A bump token on a commit that arrived mid-read would be invisible here, so this merge is refused. Re-run once the branch has settled; set match-head-commit if you want the merge itself to refuse a moved head."
+                exit 1
+              fi
               echo "::error::PR #${PR_NUMBER} declares ${declared_commits} commits but only ${n_commits} subjects could be read (the pull-request commit list caps at 250). A bump token on an unread commit would be invisible here, so this merge is refused rather than scanned from an incomplete list. Check the subjects by hand and merge manually, or split the PR."
               exit 1
             fi
@@ -329,15 +343,17 @@ jobs:
             # So the guard does the one thing that is actually available --
             # state the consequence in the log, before the merge.
             #
-            # How long that log stays actionable depends on MODE, and the
-            # difference is not cosmetic. GraphQL's `AutoMergeRequest` carries
-            # `commitHeadline` alongside `enabledAt`: the subject is STORED when
-            # auto-merge is enabled, not recomputed when GitHub finally merges.
-            # On `mode: auto` -- the DEFAULT -- the title therefore stops
-            # mattering a few steps below this one, and a title edit made after
-            # that changes nothing about the release that gets cut. Saying
-            # "still free to fix by editing the title" would be false on the
-            # path most callers are on.
+            # The subject is frozen on BOTH modes, and the freeze point is the
+            # `pr_title` read at the top of this step -- not the merge. That read
+            # is baked into `squash_subject` and passed as `--subject`; nothing
+            # re-reads the title afterwards. So a title edit made after this
+            # point changes nothing on `direct` either. MODE changes only how
+            # long the window between the read and the merge is: seconds on
+            # `direct`, indefinite on `auto`, where GitHub then holds the value
+            # itself -- GraphQL's `AutoMergeRequest` carries `commitHeadline`
+            # alongside `enabledAt`, so it is stored at enable time rather than
+            # recomputed at merge time. That is why `auto` warns: the window is
+            # long enough that someone will try to edit the title inside it.
             #
             # Known bound, both modes: `commitHeadline` is documented as IGNORED
             # when the base branch merges through a MERGE QUEUE, which hands the
@@ -355,9 +371,9 @@ jobs:
               *) cuts="PATCH release (no bump token in the PR title)" ;;
             esac
             if [ "$MODE" = "direct" ]; then
-              echo "Bump-token guard: this merge will cut a ${cuts}. The merge runs later in this same job, so editing the PR title before it does still changes what lands."
+              echo "Bump-token guard: this merge will cut a ${cuts}. The subject was captured at the top of this step, so editing the PR title from now on does not change this release; re-run to change it. On this mode the merge follows within seconds, so that window is short."
             else
-              echo "::warning::Bump-token guard: this merge will cut a ${cuts}. Mode is '${MODE}', so the subject is handed to GitHub's auto-merge a few steps below and frozen there — editing the PR title after this run changes NOTHING about the release this cuts. To change it: edit the title, then re-run this workflow, which needs a fresh approving review or a manual dispatch."
+              echo "::warning::Bump-token guard: this merge will cut a ${cuts}. The subject was captured at the top of this step, so editing the PR title from now on changes NOTHING about the release this cuts. Mode is '${MODE}', so the merge may not happen for a long time yet — GitHub stores the subject when auto-merge is enabled below and does not re-read the title when it finally merges, so the wait does not give the title back. To change it: edit the title, then re-run this workflow, which needs a fresh approving review or a manual dispatch."
             fi
           fi
 
