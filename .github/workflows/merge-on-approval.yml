@@ -232,8 +232,24 @@ jobs:
             # caller -- with the error pointing at the guard rather than at the
             # merge. `-X GET` would also work; a query string cannot be undone by
             # a later flag, so it is the safer of the two.
+            #
+            # The `// ""` and the `if . == ""` arm are both load-bearing on a
+            # commit made with --allow-empty-message.
+            #
+            # `"" | split("\n")` is the EMPTY ARRAY, so `[0]` is null, and
+            # `sub` on null is a hard jq error: "null (null) cannot be matched,
+            # as it is not a string". Under the `set -euo pipefail` above that
+            # kills the step, and the log blames the guard rather than the empty
+            # commit. `// ""` turns the null back into a string first.
+            #
+            # Then the placeholder: command substitution strips trailing
+            # newlines, so a LAST commit with an empty subject would vanish from
+            # the capture, leaving n_commits one short of declared_commits below
+            # and refusing a perfectly good merge under an error about the 250
+            # cap that has nothing to do with it. An empty subject can carry no
+            # token, so neither arm can mask one.
             pr_subjects=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/commits?per_page=100" \
-              --jq '.[].commit.message | split("\n")[0] | sub("\r$";"")')
+              --jq '.[].commit.message | split("\n")[0] // "" | sub("\r$";"") | if . == "" then "(empty subject)" else . end')
 
             # This list is capped -- the pull-request commits endpoint stops at
             # 250 however far it is paginated -- and a token past the cap is
