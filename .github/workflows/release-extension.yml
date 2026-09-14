@@ -8,7 +8,7 @@
 #   concurrency: { group: release, cancel-in-progress: true }
 #   jobs:
 #     release:
-#       uses: dustfeather/shared-workflows/.github/workflows/release-extension.yml@v5
+#       uses: dustfeather/shared-workflows/.github/workflows/release-extension.yml@v6
 #       with:
 #         runner: arc-df-<repo>
 #         targets: '["chrome","firefox"]'   # discord-purge adds "userscript"
@@ -61,6 +61,24 @@ jobs:
   tests:
     permissions:
       contents: read
+    # Still `@v5`, deliberately, and this lags the `@v6` in the caller example
+    # at the top of this file. That example is what an EXTERNAL repo writes and
+    # resolves against the tag this PR ships; these three are INTRA-repo
+    # `uses:`, and they resolve when this file is fetched at whatever tag the
+    # caller asked for -- including `v5`.
+    #
+    # v6 does not exist until this PR's own merge cuts it, so rolling them here
+    # is a bet on the `#major` surviving into the squash subject. This repo
+    # merges through frozen `@v5` merge-on-approval, which passes no
+    # `--subject` and carries no bump guard, so nothing checks that bet. Lose
+    # it and tag-release cuts a PATCH, which re-points floating `v5` onto this
+    # tree -- and then every caller on `release-extension.yml@v5` resolves
+    # `node-test.yml@v6`, which does not exist: `startup_failure`, zero jobs,
+    # empty logs, every caller at once.
+    #
+    # The cost of waiting is one follow-up commit; the cost of being wrong is
+    # every caller. Roll these three once the v6 tag exists (#43), which also
+    # stops them sitting on a frozen major.
     uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v5
     with:
       runner: ${{ inputs.runner }}

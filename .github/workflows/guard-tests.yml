@@ -1,0 +1,36 @@
+name: Guard tests
+
+# The bump-token guard in merge-on-approval.yml is shell inside a `run:` block,
+# in the one path this repo has with no retry: a nonzero exit after the merge
+# costs the release tag outright. `uses:` resolves through GitHub, so the guard
+# cannot be exercised from a local checkout — the suite extracts the block
+# verbatim from the shipped YAML and runs it against a stubbed `gh`.
+#
+# Deliberately its OWN workflow rather than a job in pr-checks.yml. That file
+# names itself in its own `paths-ignore`, so a PR touching only it creates no
+# run object at all and cannot land itself. A separate file has no such
+# constraint and can be changed in an ordinary PR.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guard-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Extract the guard from the YAML and run both suites
+        # Both suites re-extract before running, so this can never pass against
+        # a stale copy. run.sh covers the shell against a stubbed `gh` that
+        # asserts argv shape; jqtest.sh covers the `--jq` program against real
+        # jq, which the stub is structurally blind to because the program rides
+        # inside argv.
+        run: bash tests/guard/all.sh

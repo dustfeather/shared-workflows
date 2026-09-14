@@ -137,8 +137,8 @@ jobs:
   tests:
     if: github.event.action != 'closed'
     permissions: { contents: read }
-    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v5
-    # every gate is on by default in v5; opt out per gate, e.g.
+    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v6
+    # every gate is on by default; opt out per gate, e.g.
     # with:
     #   run-build: false
   review:
@@ -149,7 +149,7 @@ jobs:
       pull-requests: write
       issues: read
       id-token: write
-    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v5
+    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v6
     secrets: inherit  # use explicit pass for cross-owner — see "Cross-owner callers"
 ```
 
@@ -240,7 +240,7 @@ gate, the cron check and the verify probe:
 
 ```yaml
 bundle-api:
-  uses: dustfeather/shared-workflows/.github/workflows/deploy-cloudflare.yml@v5
+  uses: dustfeather/shared-workflows/.github/workflows/deploy-cloudflare.yml@v6
   with:
     dry-run: true
     working-dir: apps/api
@@ -304,7 +304,7 @@ Pass an Access **service token** and the verify step sends it as the
 
 ```yaml
 deploy-api:
-  uses: dustfeather/shared-workflows/.github/workflows/deploy-cloudflare.yml@v5
+  uses: dustfeather/shared-workflows/.github/workflows/deploy-cloudflare.yml@v6
   with:
     working-dir: apps/api
     verify-url: https://gated.example.com/api/v1/health
@@ -365,7 +365,7 @@ wrangler config; `worker-name` overrides it if both fail.
 
 ```yaml
 deploy-cron-worker:
-  uses: dustfeather/shared-workflows/.github/workflows/deploy-cloudflare.yml@v5
+  uses: dustfeather/shared-workflows/.github/workflows/deploy-cloudflare.yml@v6
   with:
     working-dir: workers/gw2roi
     expect-crons: 0 * * * *
@@ -400,7 +400,7 @@ already exist, which is false on a first-ever deploy.
 ```yaml
 deploy-api:
   needs: test
-  uses: dustfeather/shared-workflows/.github/workflows/deploy-cloudflare.yml@v5
+  uses: dustfeather/shared-workflows/.github/workflows/deploy-cloudflare.yml@v6
   with:
     working-dir: apps/api
     install-dir: .
@@ -463,13 +463,13 @@ build:
   permissions:
     contents: read
     packages: write        # only this job needs it
-  uses: dustfeather/shared-workflows/.github/workflows/build-push-image.yml@v5
+  uses: dustfeather/shared-workflows/.github/workflows/build-push-image.yml@v6
 
 deploy:
   needs: build
   permissions:
     contents: read         # deploy never needs more
-  uses: dustfeather/shared-workflows/.github/workflows/deploy-k8s.yml@v5
+  uses: dustfeather/shared-workflows/.github/workflows/deploy-k8s.yml@v6
   with:
     image: ${{ needs.build.outputs.image }}
 ```
@@ -505,7 +505,7 @@ build:
   permissions:
     contents: read
     packages: write
-  uses: dustfeather/shared-workflows/.github/workflows/build-push-image.yml@v5
+  uses: dustfeather/shared-workflows/.github/workflows/build-push-image.yml@v6
   with:
     runner: arc-itguys-ro-apps-page
 
@@ -513,7 +513,7 @@ deploy:
   needs: build
   permissions:
     contents: read
-  uses: dustfeather/shared-workflows/.github/workflows/deploy-k8s.yml@v5
+  uses: dustfeather/shared-workflows/.github/workflows/deploy-k8s.yml@v6
   with:
     namespace: apps-page
     runner: arc-itguys-ro-apps-page
@@ -530,7 +530,7 @@ No-build caller with a real post-deploy assertion:
 
 ```yaml
 deploy:
-  uses: dustfeather/shared-workflows/.github/workflows/deploy-k8s.yml@v5
+  uses: dustfeather/shared-workflows/.github/workflows/deploy-k8s.yml@v6
   with:
     namespace: dosar-rapid-render
     runner: arc-df-dosar-rapid
@@ -706,7 +706,7 @@ Deploy caller — a pinned chart, values from the repo, atomic:
 helm:
   permissions:
     contents: read
-  uses: dustfeather/shared-workflows/.github/workflows/deploy-helm.yml@v5
+  uses: dustfeather/shared-workflows/.github/workflows/deploy-helm.yml@v6
   with:
     namespace: nextcloud
     release: nextcloud
@@ -726,7 +726,7 @@ The same workflow as a PR gate — one word different, and nothing is written:
 
 ```yaml
 validate-chart:
-  uses: dustfeather/shared-workflows/.github/workflows/deploy-helm.yml@v5
+  uses: dustfeather/shared-workflows/.github/workflows/deploy-helm.yml@v6
   with:
     namespace: nextcloud
     release: nextcloud
@@ -763,7 +763,7 @@ on:
 
 jobs:
   review:
-    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v5
+    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v6
     secrets: inherit
 ```
 
@@ -783,7 +783,7 @@ on:
 
 jobs:
   claude:
-    uses: dustfeather/shared-workflows/.github/workflows/claude.yml@v5
+    uses: dustfeather/shared-workflows/.github/workflows/claude.yml@v6
     secrets: inherit
 ```
 
@@ -843,7 +843,7 @@ When the calling repo is owned by the same account as `shared-workflows`
 ```yaml
 jobs:
   review:
-    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v5
+    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v6
     secrets: inherit
 ```
 
@@ -871,7 +871,7 @@ and forwarded as a named secret:
 ```yaml
 jobs:
   review:
-    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v5
+    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v6
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
@@ -895,7 +895,7 @@ Example (private repo where another teammate should also be able to invoke):
 ```yaml
 jobs:
   review:
-    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v5
+    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v6
     with:
       trusted-actors: "dustfeather,collaborator-handle"
     secrets: inherit
@@ -903,30 +903,58 @@ jobs:
 
 ## Versioning
 
-Callers pin to `@v5` (the current moving major-version tag, GitHub Actions
+Callers pin to `@v6` (the current moving major-version tag, GitHub Actions
 convention). Every push to `main` is auto-tagged by
 `.github/workflows/tag-release.yml`: by default it bumps the **patch**
 component by one (wrapping at 100 into minor; minor grows without bound),
 and it re-points the floating `vN` tag at the new commit. **major is never
 bumped automatically** — a major bump can break `@vN` callers, so it only
-happens when you ask for it. To request a larger bump for a given commit,
-put a token in that commit's subject line — `#minor` or `#major` (largest
-wins; `#patch` is the explicit form of the default).
+happens when you ask for it. Request a larger bump with a token — `#minor`
+or `#major` (largest wins; `#patch` is the explicit form of the default).
+Where the token goes depends on how the change lands: **in the PR title**
+when it lands through a PR, because `merge-on-approval.yml` squashes with
+`--subject "<the PR title>"` and that title becomes the subject of the one
+commit that reaches `main`; **on the commit subject** when you push straight
+to `main`. A token left on a branch commit's subject ends up in the squash
+commit's body, where the scan does not look — the merge workflow refuses
+that merge rather than cutting a quiet patch.
+
+**A pull request with more than 250 commits is refused, not merged.** This is
+new in `v6` and it applies on the DEFAULT settings (`merge-method: squash`,
+`mode: auto`), so a caller that overrides neither is affected. To decide the
+bump, `merge-on-approval.yml` has to read the subject of every commit on the
+PR — and GitHub's pull-request commits endpoint stops at 250 however far it is
+paginated. A bump token on commit 251 would be silently invisible, which is the
+exact failure the guard exists to prevent. So it compares the subjects it
+actually read against the PR's own `.commits` total (uncapped — measured at 780
+on a PR whose listing returns 250) and refuses on any shortfall rather than
+deciding a release from a partial list.
+
+**There is no opt-out input.** The refusal cannot be switched off from a
+caller's shim; the remedy is to **merge that PR by hand, or split it**. The
+message names which of three causes it can rule out: the head shrank between
+the two reads (a force-push or a base rebase), truncation at the 250 cap, or a
+push landing between the commit read and the count read. A page that failed
+outright is not one of them — a nonzero `gh api` exits the step before the
+comparison happens. If you maintain a long-running integration branch that
+accumulates hundreds of commits, expect to land it manually.
 
 Pick the bump by what changes for **callers** of these reusable workflows:
 
 | Bump | Token | When | Caller impact |
 |---|---|---|---|
-| **patch** | _(default, or `#patch`)_ | Bug fix in a workflow; doc-only change; internal refactor; bumping an action used *inside* a workflow with no interface change; log/wording tweaks. | None — `@v5` callers get it automatically, nothing to do. |
+| **patch** | _(default, or `#patch`)_ | Bug fix in a workflow; doc-only change; internal refactor; bumping an action used *inside* a workflow with no interface change; log/wording tweaks. | None — `@v6` callers get it automatically, nothing to do. |
 | **minor** | `#minor` | Backwards-compatible feature: a new **optional** input (with a default), a brand-new workflow, a new opt-in job/step, broadened behavior that callers don't have to react to. | None required; new capability is available if they want it. |
-| **major** | `#major` | Breaking change to a workflow's contract: removing/renaming an input or secret, adding a **required** input, changing a default in a way callers must account for, requiring callers to grant new permissions, removing a workflow, renaming a job output. | **Callers on `@v5` would break.** A `#major` bump rolls the version to `vN+1`; update the README usage examples and tell callers to re-pin to `@vN+1`. |
+| **major** | `#major` | Breaking change to a workflow's contract: removing/renaming an input or secret, adding a **required** input, changing a default in a way callers must account for, requiring callers to grant new permissions, removing a workflow, renaming a job output. | **Callers on `@v6` would break.** A `#major` bump rolls the version to `vN+1`; update the README usage examples and tell callers to re-pin to `@vN+1`. |
 
 Rule of thumb: if a caller's shim workflow could keep working untouched →
 patch or minor; if it couldn't → major. When unsure, prefer the larger bump.
 
 Note: the token match is a fixed-string search of the commit subject, so
-don't write `#major`/`#minor` verbatim in a commit message unless you mean
-it (e.g. say "the major token" rather than the literal string).
+don't write `#major`/`#minor` verbatim in a commit message or PR title
+unless you mean it (e.g. say "the major token" rather than the literal
+string). Commit *bodies* are excluded from the scan for exactly this
+reason — prose discussing a bump used to match itself and cut one.
 
 ## Extension publishing usage
 
@@ -937,14 +965,14 @@ uploads an artifact named `extensions` containing the packaged `.zip`,
 ```yaml
 publish-chrome:
   needs: build
-  uses: dustfeather/shared-workflows/.github/workflows/publish-chrome.yml@v5
+  uses: dustfeather/shared-workflows/.github/workflows/publish-chrome.yml@v6
   with:
     zip-name: my-ext-chrome-${{ needs.build.outputs.tag }}.zip
   secrets: inherit
 
 publish-firefox:
   needs: build
-  uses: dustfeather/shared-workflows/.github/workflows/publish-firefox.yml@v5
+  uses: dustfeather/shared-workflows/.github/workflows/publish-firefox.yml@v6
   with:
     xpi-name: my-ext-firefox-${{ needs.build.outputs.tag }}.xpi
     source-name: source-${{ needs.build.outputs.tag }}.zip

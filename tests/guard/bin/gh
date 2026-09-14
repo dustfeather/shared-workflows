@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Deliberately incomplete: patterns exist ONLY for the calls the guard should
+# make, so a green suite also proves the old GraphQL `--json commits` read is
+# gone rather than merely unused.
+#
+# Before answering anything, assert the HTTP METHOD the real CLI would use.
+# `gh api` defaults to GET only while no parameters are supplied; one `-f`/`-F`
+# flips the default to POST, which 404s on a read route and, under
+# `set -euo pipefail`, kills the step. A stub that just returns canned output
+# cannot see that -- it answers the same whatever the method -- so check the
+# argv shape instead. This is the one test that would have caught it.
+case " $* " in
+  *" -f "*|*" -F "*|*" --field "*|*" --raw-field "*)
+    case " $* " in
+      *" -X "*|*" --method "*) ;;
+      *) echo "gh api with -f/-F and no -X: the real CLI would POST this: $*" >&2; exit 98 ;;
+    esac ;;
+esac
+# `pr merge` is the call the guard exists to shape, so record its argv for the
+# suite to assert on. Asserting the guard's own echo instead proves only that the
+# echo is still there -- the flag can be deleted without moving it.
+#
+# Record "$@" with an explicit delimiter, NOT "$*". `$*` joins on a space, which
+# destroys the argument boundaries before the suite ever sees them -- and a lost
+# boundary is exactly the regression the `args=()` array exists to prevent.
+# Unquote the append to `args+=(--subject $squash_subject)` and gh really
+# receives --subject, feat:, y, #minor, (#42), setting the subject to "feat:" and
+# passing the rest as stray positionals; under `$*` the recording renders
+# identically to the correct call and every case stays green. Pipes make each
+# boundary visible to a plain substring assertion.
+case "$1" in
+  pr) if [ "$2" = "merge" ]; then
+        if [ -n "${MERGE_ARGV:-}" ]; then
+          printf '|' > "$MERGE_ARGV"
+          printf '%s|' "$@" >> "$MERGE_ARGV"
+        fi
+        exit 0
+      fi ;;
+esac
+case "$*" in
+  *"--json title"*)   echo "$FIX_TITLE" ;;
+  *"/commits"*)       printf '%s\n' "$FIX_SUBJECTS" ;;
+  *"pulls/"*)         # FIX_NCOMMITS may hold SEVERAL values, one per call, so a
+                      # test can make the head appear to move between the two
+                      # reads. Falls back to the fixture's own line count.
+                      set -- ${FIX_NCOMMITS:-$(printf '%s' "$FIX_SUBJECTS" | grep -c '')}
+                      i=$(cat "${NC_SEQ:-/dev/null}" 2>/dev/null || echo 0); i=$((i+1))
+                      [ -n "${NC_SEQ:-}" ] && echo "$i" > "$NC_SEQ"
+                      [ "$i" -le "$#" ] || i=$#
+                      eval "echo \${$i}" ;;
+  *) echo "UNEXPECTED gh call: $*" >&2; exit 99 ;;
+esac

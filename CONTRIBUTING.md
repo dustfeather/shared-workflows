@@ -2,7 +2,7 @@
 
 This repo hosts reusable GitHub Actions workflows that are consumed by
 every other repo under this account via `uses:
-dustfeather/shared-workflows/.github/workflows/<name>.yml@v5`. A change
+dustfeather/shared-workflows/.github/workflows/<name>.yml@v6`. A change
 that lands here ships to every caller on their next workflow run. Treat
 the blast radius accordingly.
 
@@ -25,13 +25,91 @@ the blast radius accordingly.
 
 The repo uses GitHub Actions' floating major-tag convention:
 
-- `v1` — moving tag. Every backwards-compatible commit on `main` moves
-  this tag forward (`git tag -f v1 && git push --force origin v1`).
-  Callers pin to this and pick up improvements automatically.
-- `vX.Y.Z` — immutable per-commit tag. Created for archaeology so the
-  exact version a caller was on at any point in time can be reconstructed.
-- `v2` — only when an input/secret/permission becomes breaking. New
-  callers opt in by changing their `uses:` reference.
+- `v6` — moving tag, the current major. `tag-release.yml` re-points it
+  automatically on every push to `main`; nobody runs `git tag -f` by hand.
+  Callers pin to this and pick up improvements on their next run.
+- `vX.Y.Z` — immutable per-commit tag, cut by the same workflow. Created
+  for archaeology so the exact version a caller was on at any point in
+  time can be reconstructed.
+- `v7` — only when an input/secret/permission becomes breaking, and only
+  deliberately: the major is never bumped automatically. New callers opt
+  in by changing their `uses:` reference. Note that re-pointing only ever
+  applies to the CURRENT major, so cutting a new one freezes the old tag
+  where it stands.
+
+Bumps larger than a patch are requested with a token, and where it goes
+depends on how the change lands:
+
+- **Through a PR → the PR title.** PRs land with a squash merge, and
+  `merge-on-approval.yml` passes `--subject "<the PR title>"`, so the PR
+  title *is* the subject of the single commit that reaches `main`.
+
+  **Not yet true in this repo itself, and the exception is silent.**
+  `pr-merge.yml` is pinned to `@v5`, which has no bump-token guard at all and
+  passes no `--subject` — it merges with a bare
+  `gh pr merge "$PR_URL" "$method"`. The subject is therefore composed by
+  GitHub from `squash_merge_commit_title`, and on the default
+  `COMMIT_OR_PR_TITLE` a **single-commit** PR lands the commit's own subject,
+  switching to the PR title only from two commits up. So a one-commit PR
+  titled `add X input #minor` whose commit subject is `add X input` lands
+  `add X input`, `tag-release.yml` finds no token, and a patch is cut where a
+  minor was asked for — with nothing checking, because the guard that would
+  refuse this ships in v6 and `pr-merge.yml` does not run it yet.
+  **Until `pr-merge.yml` is repointed to `@v6` (#43), put the token in BOTH
+  the PR title and the head commit subject when working in this repo.**
+- **Pushed straight to `main` → the commit subject.** Nothing replays it,
+  so its own subject is the subject.
+
+`tag-release.yml` reads tokens from commit subjects only — deliberately, so
+prose merely discussing a bump cannot cut one. A token left on a branch
+commit's subject therefore lands in the squash commit's *body*, where the
+scan is designed not to look. `merge-on-approval.yml` refuses such a merge
+rather than letting the release quietly degrade to a patch, and the fix it
+names is to edit the PR title: that needs no new commit, so the approving
+review still stands. Pushing another commit to carry the token does not
+work — its subject becomes body text too.
+
+**The mirror hazard, and why it matters more now.** Because the PR title is
+always the landing subject, a bump token written there *incidentally* — quoting
+an error message, naming the convention in prose, describing what a change does
+— cuts that release for real. `tag-release.yml` excludes commit bodies for
+exactly this reason: prose discussing a bump once matched itself and cut a
+spurious minor. A PR title has no equivalent exclusion, because under this
+convention it is the only channel the token can travel on, so an incidental
+token and an intended one are identical text and nothing can tell them apart.
+Write "the major token" rather than the literal string unless you mean it. The
+merge log states which release the merge will cut before it lands, so check it
+if a title mentions versioning at all.
+
+**A PR with more than 250 commits is refused rather than merged, and there is
+no way to turn that off.** Deciding the bump means reading the subject of every
+commit on the PR, and GitHub's pull-request commits endpoint caps at 250 however
+far it is paginated — so a token on commit 251 would be invisible and the
+release would quietly degrade to a patch. That is precisely the failure this
+guard exists to prevent, so instead of trusting a partial list it compares the
+subjects it read against the PR's own `.commits` total, which is uncapped
+(measured: 780 on a PR whose listing returns 250), and exits nonzero on any
+shortfall.
+
+The refusal is deliberate and it has no opt-out input, which means the
+automation simply cannot land such a PR: **merge it by hand, or split it into
+smaller ones.** The message distinguishes three causes — the head shrank
+between the reads, truncation at the 250 cap, or a push landing between the
+commit read and the count read — so read it before assuming the commit count is
+the cause. A pagination page that failed outright is NOT one of them, however
+natural it looks in that list: the subjects come from a command substitution,
+so under `set -euo pipefail` a nonzero `gh api` kills the step before the
+comparison is ever reached. It exits before
+`gh pr merge` is called, so a refusal can never strand a merged-but-untagged
+commit — the failure mode it is most important not to have.
+
+The subject is passed explicitly rather than left to the repo's
+`squash_merge_commit_title` setting on purpose. GitHub's default there,
+`COMMIT_OR_PR_TITLE`, uses the commit's own subject on a single-commit PR
+and switches to the PR title only from two commits up. Without the flag the
+correct advice would depend on a per-repo setting nobody audits and on how
+many commits the PR happens to have, and the only rule that always held
+would be "put the token in both places".
 
 Patch = wording / comments / log-message tweaks.
 Minor = new optional input, new bot in default allowlist, new feature
