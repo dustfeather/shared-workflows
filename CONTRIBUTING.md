@@ -44,19 +44,19 @@ depends on how the change lands:
   `merge-on-approval.yml` passes `--subject "<the PR title>"`, so the PR
   title *is* the subject of the single commit that reaches `main`.
 
-  **Not yet true in this repo itself, and the exception is silent.**
-  `pr-merge.yml` is pinned to `@v5`, which has no bump-token guard at all and
-  passes no `--subject` — it merges with a bare
-  `gh pr merge "$PR_URL" "$method"`. The subject is therefore composed by
-  GitHub from `squash_merge_commit_title`, and on the default
+  **True in this repo as of v6.0.0 (#43), and it was NOT true before that.**
+  `pr-merge.yml` spent the gap between the v6 cut and its repoint pinned to a
+  frozen `@v5`, which has no bump-token guard at all and passes no `--subject`
+  — it merged with a bare `gh pr merge "$PR_URL" "$method"`, leaving the
+  subject to GitHub's `squash_merge_commit_title`. On the default
   `COMMIT_OR_PR_TITLE` a **single-commit** PR lands the commit's own subject,
-  switching to the PR title only from two commits up. So a one-commit PR
-  titled `add X input #minor` whose commit subject is `add X input` lands
-  `add X input`, `tag-release.yml` finds no token, and a patch is cut where a
-  minor was asked for — with nothing checking, because the guard that would
-  refuse this ships in v6 and `pr-merge.yml` does not run it yet.
-  **Until `pr-merge.yml` is repointed to `@v6` (#43), put the token in BOTH
-  the PR title and the head commit subject when working in this repo.**
+  switching to the PR title only from two commits up, so a one-commit PR
+  titled `add X input #minor` whose commit subject is `add X input` landed
+  `add X input` and cut a patch where a minor was asked for, with nothing
+  checking. The pin now points at `@v6`, so the guard runs and the PR title is
+  the landing subject by construction. Worth knowing because any repo whose
+  pin sits on a frozen major is still in that earlier state: there, put the
+  token in BOTH the PR title and the head commit subject.
 - **Pushed straight to `main` → the commit subject.** Nothing replays it,
   so its own subject is the subject.
 

@@ -50,21 +50,21 @@ Consequences a change here is most likely to get wrong:
   checks internally; keep it, because it stops pointless runs and keeps the
   intent next to the trigger, but do not mistake it for the thing preventing
   a `changes_requested` review from cutting a release.
-- **`pr-merge.yml` pins `@v5` while this branch ships `v6`, so that pin is
-  FROZEN, not lagging.**
-  A `uses:` job validates inputs against the PINNED ref, not the PR. So a PR
-  adding an input to a reusable workflow *and* passing it from this repo's own
-  shim in one commit fails `Invalid input, <name> is not defined in the
+- **A `uses:` job validates inputs against the PINNED ref, not the PR.** So a
+  PR adding an input to a reusable workflow *and* passing it from this repo's
+  own shim in one commit fails `Invalid input, <name> is not defined in the
   referenced workflow` — `startup_failure`, merge job never starts, PR cannot
   land itself. Merge it by hand, or split: ship the input, let `tag-release.yml`
   move the major tag, then add the caller.
   Within one major that lag self-heals at the next tag. ACROSS a major it does
   not: `tag-release.yml` re-points only the CURRENT major, so the v6 cut froze
-  `v5` exactly as the v5 cut froze `v4` at v4.14.2. Until `pr-merge.yml` is
-  repointed to `@v6` by hand (tracked in #43), this repo's own merges keep running frozen v5
-  code — which means the explicit squash `--subject` described above is NOT in
-  effect for this repo's merges, however plainly the rest of this file states
-  it. Same for `pr-checks.yml`, which has the extra constraint below.
+  `v5` exactly as the v5 cut froze `v4` at v4.14.2. **This repo's own pins were
+  repointed to `@v6` by hand once v6.0.0 existed (#43)** — `pr-merge.yml`,
+  `pr-checks.yml` and the three intra-repo refs in `release-extension.yml` — so
+  this repo's own merges now DO run the squash `--subject` and the bump-token
+  guard described above. Between the v6 cut and that repoint they did not, and
+  a pin left behind on a frozen major is the one case where the rest of this
+  file describes behaviour the repo is not actually getting.
 - **`pr-checks.yml` names ITSELF in its own `paths-ignore`.** A PR whose only
   changed file is `.github/workflows/pr-checks.yml` changes a non-empty set of
   files, every one of them excluded, so GitHub creates **no run object** — not a

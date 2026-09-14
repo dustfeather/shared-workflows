@@ -76,10 +76,10 @@ jobs:
     # `node-test.yml@v6`, which does not exist: `startup_failure`, zero jobs,
     # empty logs, every caller at once.
     #
-    # The cost of waiting is one follow-up commit; the cost of being wrong is
-    # every caller. Roll these three once the v6 tag exists (#43), which also
-    # stops them sitting on a frozen major.
-    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v5
+    # The cost of waiting was one follow-up commit; the cost of being wrong
+    # was every caller. v6.0.0 is cut, so these three now point at it (#43) --
+    # which also stops them sitting on a frozen major.
+    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v6
     with:
       runner: ${{ inputs.runner }}
 
@@ -220,7 +220,7 @@ jobs:
   publish-chrome:
     needs: [prepare, build]
     if: contains(fromJSON(inputs.targets), 'chrome')
-    uses: dustfeather/shared-workflows/.github/workflows/publish-chrome.yml@v5
+    uses: dustfeather/shared-workflows/.github/workflows/publish-chrome.yml@v6
     with:
       runner: ${{ inputs.runner }}
       artifact-name: extensions-chrome
@@ -230,7 +230,7 @@ jobs:
   publish-firefox:
     needs: [prepare, build]
     if: contains(fromJSON(inputs.targets), 'firefox')
-    uses: dustfeather/shared-workflows/.github/workflows/publish-firefox.yml@v5
+    uses: dustfeather/shared-workflows/.github/workflows/publish-firefox.yml@v6
     with:
       runner: ${{ inputs.runner }}
       artifact-name: extensions-firefox

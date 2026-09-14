@@ -33,7 +33,7 @@ jobs:
     # this very file, so a PR touching ONLY it starts no "PR checks" run at
     # all — no review, therefore no approval, therefore pr-merge.yml never
     # fires and the PR cannot land itself. Landed directly on main instead.
-    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v5
+    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v6
     with:
       runner: arc-df-shared-workflows
     secrets:

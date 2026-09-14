@@ -92,16 +92,17 @@ jobs:
     # caller tracks the floating major, and this shim is the one that merges
     # the commits those releases are cut from, so pinning it exactly would
     # make this repo's own automation the only thing not exercising what it
-    # ships. That reasoning INVERTS once the tag stops moving — a frozen `@v5`
-    # is now precisely the "not exercising what it ships" case it was meant to
-    # avoid, and it is why the bump-token guard and the squash `--subject` are
-    # not in effect for this repo's own merges. Repointing to `@v6` is #43.
+    # ships. That reasoning INVERTS once the tag stops moving, which is why
+    # this pin did NOT stay on the frozen `@v5`: a frozen major is precisely
+    # the "not exercising what it ships" case the floating pin exists to avoid.
+    # Repointed to `@v6` once v6.0.0 was cut (#43), so this repo's own merges
+    # now run the bump-token guard and the squash `--subject` they ship.
     #
     # `@v4` is FROZEN at v4.14.2 and predates the close block entirely:
     # tag-release.yml re-points only the CURRENT major, so the v5 cut stranded
     # v4 where it stood. A pin left on `@v4` does not silently inherit
     # anything; it keeps pre-v5 behaviour for good.
-    uses: dustfeather/shared-workflows/.github/workflows/merge-on-approval.yml@v5
+    uses: dustfeather/shared-workflows/.github/workflows/merge-on-approval.yml@v6
     with:
       runner: arc-df-shared-workflows
       # `direct`, not the reusable workflow's `auto` default, because
