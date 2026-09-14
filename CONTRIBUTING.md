@@ -81,6 +81,24 @@ Write "the major token" rather than the literal string unless you mean it. The
 merge log states which release the merge will cut before it lands, so check it
 if a title mentions versioning at all.
 
+**A PR with more than 250 commits is refused rather than merged, and there is
+no way to turn that off.** Deciding the bump means reading the subject of every
+commit on the PR, and GitHub's pull-request commits endpoint caps at 250 however
+far it is paginated — so a token on commit 251 would be invisible and the
+release would quietly degrade to a patch. That is precisely the failure this
+guard exists to prevent, so instead of trusting a partial list it compares the
+subjects it read against the PR's own `.commits` total, which is uncapped
+(measured: 780 on a PR whose listing returns 250), and exits nonzero on any
+shortfall.
+
+The refusal is deliberate and it has no opt-out input, which means the
+automation simply cannot land such a PR: **merge it by hand, or split it into
+smaller ones.** The same comparison also fires when a pagination page fails or
+a push lands mid-read, and the message says which of those it can rule out, so
+read it before assuming the commit count is the cause. It exits before
+`gh pr merge` is called, so a refusal can never strand a merged-but-untagged
+commit — the failure mode it is most important not to have.
+
 The subject is passed explicitly rather than left to the repo's
 `squash_merge_commit_title` setting on purpose. GitHub's default there,
 `COMMIT_OR_PR_TITLE`, uses the commit's own subject on a single-commit PR

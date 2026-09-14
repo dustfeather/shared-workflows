@@ -919,6 +919,24 @@ to `main`. A token left on a branch commit's subject ends up in the squash
 commit's body, where the scan does not look — the merge workflow refuses
 that merge rather than cutting a quiet patch.
 
+**A pull request with more than 250 commits is refused, not merged.** This is
+new in `v6` and it applies on the DEFAULT settings (`merge-method: squash`,
+`mode: auto`), so a caller that overrides neither is affected. To decide the
+bump, `merge-on-approval.yml` has to read the subject of every commit on the
+PR — and GitHub's pull-request commits endpoint stops at 250 however far it is
+paginated. A bump token on commit 251 would be silently invisible, which is the
+exact failure the guard exists to prevent. So it compares the subjects it
+actually read against the PR's own `.commits` total (uncapped — measured at 780
+on a PR whose listing returns 250) and refuses on any shortfall rather than
+deciding a release from a partial list.
+
+**There is no opt-out input.** The refusal cannot be switched off from a
+caller's shim; the remedy is to **merge that PR by hand, or split it**. The
+same check also catches a page that failed outright and a push that lands
+mid-read, and the error message names which of those it can rule out. If you
+maintain a long-running integration branch that accumulates hundreds of
+commits, expect to land it manually.
+
 Pick the bump by what changes for **callers** of these reusable workflows:
 
 | Bump | Token | When | Caller impact |
