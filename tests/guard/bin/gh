@@ -16,6 +16,15 @@ case " $* " in
       *) echo "gh api with -f/-F and no -X: the real CLI would POST this: $*" >&2; exit 98 ;;
     esac ;;
 esac
+# `pr merge` is the call the guard exists to shape, so record its argv verbatim
+# for the suite to assert on. Asserting the guard's own echo instead proves only
+# that the echo is still there -- the flag can be deleted without moving it.
+case "$1" in
+  pr) if [ "$2" = "merge" ]; then
+        [ -n "${MERGE_ARGV:-}" ] && printf '%s\n' "$*" > "$MERGE_ARGV"
+        exit 0
+      fi ;;
+esac
 case "$*" in
   *"--json title"*)   echo "$FIX_TITLE" ;;
   *"/commits"*)       printf '%s\n' "$FIX_SUBJECTS" ;;

@@ -8,7 +8,13 @@ python3 - "$D/guard.sh" <<'PY'
 import io, sys
 s = io.open('.github/workflows/merge-on-approval.yml', encoding='utf-8').read()
 a = s.index('          if [ "$method" = "--squash" ]; then')
-b = s.index('          del=""')
+# End AFTER the merge call, not before `del=""`. The guard's whole promise is
+# delivered by `args+=(--subject "$squash_subject")` and the `gh pr merge` that
+# consumes it; slicing them out left the flag untested, so deleting it kept
+# every case green while every caller silently fell back to
+# `squash_merge_commit_title`. Anything the suite must be able to break has to
+# be INSIDE the slice.
+b = s.index('          # --- Close the PR')
 out = [l[10:] if l.startswith(' ' * 10) else l for l in s[a:b].splitlines()]
 io.open(sys.argv[1], 'w', encoding='utf-8').write("set -euo pipefail\n" + "\n".join(out) + "\n")
 PY

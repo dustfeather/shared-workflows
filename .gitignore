@@ -1,8 +1,9 @@
 # Local scratch: one-shot rollout scripts, PR drafts, throwaway probes.
 # A one-shot rollout script is correct exactly once, so it does not belong on
-# main. Reusable TESTS do — they live in tests/ and CI runs them (see #44);
-# excluding them would make the guard's correctness unreproducible by anyone
-# but its author, which is the thing this rule was originally, wrongly, used for.
+# main. Reusable TESTS do: they live in tests/ and guard-tests.yml runs them on
+# every push and pull request. Excluding them would leave the guard's
+# correctness unreproducible by anyone but its author, which is what this rule
+# was originally, wrongly, used for.
 scratchpad/
 
 # Stale leftover from the CI-only code-review-graph build.

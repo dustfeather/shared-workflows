@@ -3,13 +3,25 @@ D="$(cd "$(dirname "$0")" && pwd)"
 export PATH="$D/bin:$PATH"
 "$D/extract.sh" || { echo "extract.sh failed; refusing to run against a stale guard.sh"; exit 2; }
 export REPO=o/r PR_NUMBER=42
+# The slice now runs through `gh pr merge`, so the inputs that call reads have
+# to exist. Defaults match the reusable workflow's own defaults.
+export PR_URL=https://github.com/o/r/pull/42 DELETE_BRANCH=false
 pass=0; fail=0
 t() { # name expected_exit mode method title subjects [expected_substring]
   local name=$1 want=$2 want_str=${7:-}
   export MODE=$3 method=$4 FIX_TITLE=$5 FIX_SUBJECTS=$6
   export FIX_NCOMMITS=${8:-}
   NC_SEQ=$(mktemp); export NC_SEQ
+  MERGE_ARGV=$(mktemp); export MERGE_ARGV
   out=$(bash "$D/guard.sh" 2>&1); rc=$?
+  # Assertions may target the recorded merge argv instead of the guard's own
+  # output, by prefixing the expected substring with "argv:". The guard's echo
+  # survives deleting the flag; the argv does not.
+  case "$want_str" in "argv:"*|"!argv:"*)
+    merge_argv=$(cat "$MERGE_ARGV" 2>/dev/null || true)
+    out="merge-argv: ${merge_argv}"
+    want_str=${want_str/argv:/} ;;
+  esac
   if [ "$rc" != "$want" ]; then
     printf 'FAIL  %-52s exit=%s want=%s\n%s\n' "$name" "$rc" "$want" "$out"; fail=$((fail+1)); return
   fi
@@ -82,6 +94,20 @@ t "CONTROL: below-cap shortfall does not assert the cap" 1 auto --squash "feat: 
   "!was most likely truncated" "3 3"
 t "a stable count past the cap names truncation"   1 auto   --squash  "feat: y" "$(printf 'a: one\nb: two')" \
   "781 is past the 250-commit cap on the pull-request commit list, so the read was most likely truncated there" "781 781"
+# The guard's PROMISE is the flag on the merge call, not the echo above it.
+# These assert the recorded argv: delete `args+=(--subject "$squash_subject")`
+# and every echo-based case stays green while these four go red.
+t "squash: --subject reaches the merge argv"       0 auto   --squash  "feat: y #minor" "feat: y" \
+  "argv:--subject feat: y #minor (#42)"
+t "squash: the subject rides on the auto path too" 0 auto   --squash  "fix: y"        "fix: y" \
+  "argv:pr merge --auto --squash --subject fix: y (#42)"
+t "direct mode passes the same subject"            0 direct --squash  "fix: y"        "fix: y" \
+  "argv:--squash --subject fix: y (#42)"
+# The flag belongs to squash alone: a rebase merge has no subject to set, and
+# passing one would be a hard error from the real CLI.
+t "CONTROL: rebase carries no --subject"           0 auto   --rebase  "feat: y #minor" "feat: y" \
+  "!argv:--subject"
+
 # The subject line must not state the landing subject as settled fact: a base
 # branch behind a merge queue discards it, and this guard cannot detect that.
 t "subject line is hedged, not asserted"           0 auto   --squash  "fix: y"  "fix: y" \
