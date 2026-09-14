@@ -36,9 +36,12 @@ jobs:
   merge:
     # Trusted-trigger gate. merge-on-approval.yml decides what an APPROVAL is
     # (state, draft) but deliberately does not decide WHO may approve — its
-    # header defers that to the caller's branch protection. This repo is
-    # public and `main` is unprotected, so without a gate here any account
-    # could submit an approving review on any open PR and land it on main.
+    # header defers that to the caller's branch protection. `main` here now
+    # HAS protection — but only `guard` as a required status check, with no
+    # `required_pull_request_reviews` block, so protection constrains WHAT may
+    # land and says nothing about WHO may approve. This repo is public, so
+    # without a gate here any account could still submit an approving review
+    # on any open PR and land it on main once `guard` is green.
     # tag-release.yml would then re-point `v5`, which every caller resolves at
     # runtime, cross-owner `ITGuys-RO/*` repos included. Self-approval is
     # blocked by GitHub; a second throwaway account is not a barrier.
@@ -115,14 +118,23 @@ jobs:
       # for good, and the log line reads like correct behaviour.
       #
       # `direct` merges inside the step, so the run only completes once main
-      # has actually moved. It is also what merge-on-approval.yml documents
-      # `direct` for — no branch protection here means no required check for
-      # `--auto` to wait on anyway, so `auto` buys nothing and costs the race.
+      # has actually moved. That reason stands ALONE and is the whole case for
+      # `direct` here. It used to be propped up by a second argument — that
+      # `main` had no required check for `--auto` to wait on, so `auto` bought
+      # nothing — and that argument is dead: `guard` is a required status check
+      # on `main` since 2026-09-14. `auto` would now genuinely wait for it. It
+      # still loses the race above, which is why this stays `direct`.
       #
       # `direct` does not retry, and that is the intended failure mode. If the
       # merge cannot land — mergeability not computed yet, a conflict, main
-      # moved between the approval and the merge — the run goes RED and the PR
-      # stays open. Nothing re-triggers it: another approving review does, but
+      # moved between the approval and the merge, **or `guard` not yet
+      # concluded on the head commit** — the run goes RED and the PR
+      # stays open. That last one is new with the required check: this job
+      # fires on `pull_request_review`, and nothing sequences the review after
+      # the guard suite, so an approval arriving while `guard` is still queued
+      # is refused by protection rather than waited out. In practice the review
+      # takes minutes and `guard` takes under one, so it is a rare loss; when
+      # it happens, re-approve or merge by hand once `guard` is green. Nothing re-triggers it: another approving review does, but
       # the agent will not post one unprompted. Push to the branch (which
       # re-runs the review) or merge by hand. A red run left visible is the
       # right outcome; the alternative is a retry loop racing whatever moved.
@@ -153,8 +165,11 @@ jobs:
       # that justified rebase cannot come back unannounced.
       merge-method: squash
       # Merge the commit that was actually reviewed. An approval names a SHA;
-      # a merge does not. With no branch protection there is no stale-review
-      # dismissal, so a commit pushed between the approval and this job would
+      # a merge does not. `main`'s protection carries a required CHECK and no
+      # `required_pull_request_reviews` block, so there is no
+      # `dismiss_stale_reviews` and an approval never goes stale on its own —
+      # protection does not do this for us. A commit pushed between the
+      # approval and this job would
       # otherwise land unreviewed — and tag-release then re-points `v5`, which
       # every caller resolves at runtime — 103 `uses:` references across 5
       # owners as of 2026-09-13, cross-owner `ITGuys-RO/*` repos included.

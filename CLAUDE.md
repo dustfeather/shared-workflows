@@ -4,7 +4,7 @@ Library of reusable GitHub Actions workflows (`workflow_call`) in `.github/workf
 
 ## Verifying changes
 
-**Touching the bump-token guard in `merge-on-approval.yml` — the `run:` block between the `# guard-slice-begin` and `# guard-slice-end` markers — run `bash tests/guard/all.sh` before pushing.** Describe the region by those markers and nothing else. It used to be described here, and anchored in `tests/guard/extract.sh`, by the `if [ "$method" = "--squash" ]` line; that made the condition the one line the suite could not mutate, because mutating it deleted the anchor and the slice silently matched ~290 lines further down. The markers exist to end that, and `extract.sh` now refuses rather than guessing when they are absent — so moving or rewriting that condition is fine, and dropping the markers is not. It is the local check for that block and it is not optional: the guard sits in the one path with no retry, where a nonzero exit after the merge costs the release tag outright. The pre-push hook runs it, so it is enforced rather than merely declared — it used to say this while `.githooks/pre-push` ran only `check-workflows.py`, which made the one check called mandatory the one nothing local gated. The suite RE-EXTRACTS the block verbatim from the shipped YAML on every run, so it always tests the bytes that ship and cannot drift from an edit — but equally, an edit that breaks it fails immediately rather than at merge time. `guard-tests.yml` runs the same script on every push and pull request.
+**Touching the bump-token guard in `merge-on-approval.yml` — the `run:` block between the `# guard-slice-begin` and `# guard-slice-end` markers — run `bash tests/guard/all.sh` before pushing.** Describe the region by those markers and nothing else. It used to be described here, and anchored in `tests/guard/extract.sh`, by the `if [ "$method" = "--squash" ]` line; that made the condition the one line the suite could not mutate, because mutating it deleted the anchor and the slice silently matched ~290 lines further down. The markers exist to end that, and `extract.sh` now refuses rather than guessing when they are absent — so moving or rewriting that condition is fine, and dropping the markers is not. It is the local check for that block and it is not optional: the guard sits in the one path with no retry, where a nonzero exit after the merge costs the release tag outright. The pre-push hook runs it, so it is enforced rather than merely declared — it used to say this while `.githooks/pre-push` ran only `check-workflows.py`, which made the one check called mandatory the one nothing local gated. The suite RE-EXTRACTS the block verbatim from the shipped YAML on every run, so it always tests the bytes that ship and cannot drift from an edit — but equally, an edit that breaks it fails immediately rather than at merge time. `guard-tests.yml` runs the same script on every push and pull request, and since 2026-09-14 its `guard` job is the **one required status check on `main`**, so a red suite blocks the bot merge (which runs as `github-actions[bot]`, not an admin) instead of merely reporting. `enforce_admins` is deliberately `false` — an owner's direct push still bypasses it, which is what keeps the `pr-checks.yml` remedy below available. No `required_pull_request_reviews`: protection says nothing about WHO may approve (that is `pr-merge.yml`'s `if:`) and there is no `dismiss_stale_reviews`, so `match-head-commit` stays load-bearing.
 
 Two suites, because a stubbed `gh` can only pattern-match argv and is therefore blind to a program passed INSIDE argv: `tests/guard/run.sh` covers the shell, `tests/guard/jqtest.sh` runs the `--jq` program against real jq. Assert on the recorded `gh pr merge` argv (the `argv:` prefix), not on the guard's own log lines — an `echo` survives deleting the flag it describes.
 
@@ -58,13 +58,12 @@ Consequences a change here is most likely to get wrong:
   move the major tag, then add the caller.
   Within one major that lag self-heals at the next tag. ACROSS a major it does
   not: `tag-release.yml` re-points only the CURRENT major, so the v6 cut froze
-  `v5` exactly as the v5 cut froze `v4` at v4.14.2. **This repo's own pins were
-  repointed to `@v6` by hand once v6.0.0 existed (#43)** — `pr-merge.yml`,
-  `pr-checks.yml` and the three intra-repo refs in `release-extension.yml` — so
-  this repo's own merges now DO run the squash `--subject` and the bump-token
-  guard described above. Between the v6 cut and that repoint they did not, and
-  a pin left behind on a frozen major is the one case where the rest of this
-  file describes behaviour the repo is not actually getting.
+  `v5` exactly as the v5 cut froze `v4` at v4.14.2. **All five of this repo's own
+  pins were repointed to `@v6` by hand once v6.0.0 existed (#43)**, so its merges
+  now DO run the squash `--subject` and the bump-token guard described above. A
+  pin left behind on a frozen major is the one case where the rest of this file
+  describes behaviour the repo is not actually getting — check the pins first
+  when something here does not match what you observe.
 - **`pr-checks.yml` names ITSELF in its own `paths-ignore`.** A PR whose only
   changed file is `.github/workflows/pr-checks.yml` changes a non-empty set of
   files, every one of them excluded, so GitHub creates **no run object** — not a
