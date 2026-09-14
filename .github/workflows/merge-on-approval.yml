@@ -211,39 +211,18 @@ jobs:
           if [ "$method" = "--squash" ]; then
             pr_title=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json title --jq '.title')
             pr_subjects=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json commits --jq '.commits[].messageHeadline')
-            pr_commits=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json commits --jq '.commits | length')
-            squash_title_src=$(gh api "/repos/$REPO" --jq '.squash_merge_commit_title')
 
-            # A squash lands ONE commit, and tag-release.yml reads bump tokens
-            # (`#minor`/`#major`) from commit SUBJECTS only — deliberately, since
-            # a body that merely discusses a bump matches itself. So the only
-            # question that matters is whether the subject this merge is about to
-            # produce still carries the bump somebody asked for.
+            # The merge below passes `--subject "$pr_title"`, so the landing
+            # subject IS the PR title — by construction, not by prediction.
             #
-            # Which text becomes that subject is not constant, and getting it
-            # backwards is easy: `COMMIT_OR_PR_TITLE`, GitHub's default, names
-            # both sources because it uses THE COMMIT's subject when the PR has a
-            # single commit, and the PR title only from two commits up. So the
-            # advice "put the token in the PR title" is right for a multi-commit
-            # PR and WRONG for a single-commit one, where the title is discarded.
-            #
-            # Rather than special-case either, resolve the landing subject first
-            # and compare ranks once. That catches both directions of the mistake
-            # — a token stranded on a commit subject that is about to become body
-            # text, and a token stranded in a PR title that is about to be
-            # discarded — with one rule and no exemption to keep in sync.
-            if [ "$pr_commits" = 1 ] && [ "$squash_title_src" = COMMIT_OR_PR_TITLE ]; then
-              landing_subject="$pr_subjects"
-              landing_desc="the single commit's subject (COMMIT_OR_PR_TITLE)"
-              put_it="on that commit's subject"
-            else
-              landing_subject="$pr_title"
-              landing_desc="the PR title"
-              put_it="in the PR title"
-            fi
-
-            # Largest wins, matching tag-release.yml, so ranks compare directly
-            # and a #minor under a #major is already subsumed rather than flagged.
+            # That is the whole reason the flag is passed. Left off, the subject
+            # comes from the repo's `squash_merge_commit_title` setting, and
+            # GitHub's default `COMMIT_OR_PR_TITLE` uses THE COMMIT's subject on
+            # a single-commit PR, switching to the PR title only from two commits
+            # up. A guard would then have to infer which text wins from a
+            # per-repo setting nobody audits, and the rule taught to humans would
+            # have to be "put the token in both places, because it depends".
+            # Controlling the subject collapses both into one rule: PR title.
             bump_rank() {
               case "$1" in
                 *'#major'*) echo 2 ;;
@@ -256,19 +235,18 @@ jobs:
             # scalar and break the file (caught by the YAML parse, but only after
             # the fact).
             asked_text=$(printf '%s\n%s' "$pr_title" "$pr_subjects")
-            landing_rank=$(bump_rank "$landing_subject")
+            title_rank=$(bump_rank "$pr_title")
             asked_rank=$(bump_rank "$asked_text")
 
-            echo "Bump-token guard: squash subject will be ${landing_desc}."
-            if [ "$landing_rank" -lt "$asked_rank" ]; then
+            if [ "$title_rank" -lt "$asked_rank" ]; then
               case "$asked_rank" in
                 2) asked='#major' ;;
                 *) asked='#minor' ;;
               esac
-              echo "::error::A ${asked} token was requested, but it is not on the text that becomes this squash commit's subject — that will be ${landing_desc}. tag-release.yml reads subjects only, so the token would land in the commit body and the release would be cut as a patch instead. Put ${asked} ${put_it} and re-run. Putting it in both places is always safe: largest wins, and whichever copy is not used is simply ignored."
+              echo "::error::A ${asked} token was requested on a commit subject, but this squash lands ONE commit whose subject is the PR TITLE. tag-release.yml reads subjects only, so the token would end up in the commit body where the scan is designed not to look, and the release would be cut as a patch. Fix: edit the PR title to contain ${asked}, then re-run. Editing the title needs no new commit, so the approving review still stands. Pushing another commit to carry the token does NOT work — its subject becomes body text too."
               exit 1
             fi
-            echo "Bump-token guard: the landing subject carries the bump that was asked for."
+            echo "Bump-token guard: squash subject will be the PR title, which carries the bump that was asked for."
           fi
 
           del=""
@@ -305,14 +283,22 @@ jobs:
           # GitHub and returns — so a nonzero exit means auto-merge was not
           # enabled, nothing landed, and there is no tag or close to strand.
           # Failing is the correct outcome on that path.
+          # Assembled as an array: `--subject` carries a PR title with spaces in
+          # it, while the unquoted `$del $match` below depend on word splitting
+          # and so cannot hold one. Never empty, which keeps `set -u` happy.
+          args=("$method")
+          if [ "$method" = "--squash" ]; then
+            args+=(--subject "$pr_title")
+          fi
+
           merge_rc=0
           if [ "$MODE" = "direct" ]; then
-            gh pr merge "$PR_URL" "$method" $del $match || merge_rc=$?
+            gh pr merge "$PR_URL" "${args[@]}" $del $match || merge_rc=$?
             if [ "$merge_rc" -ne 0 ]; then
               echo "::error::gh pr merge exited ${merge_rc} for $PR_URL. It may still have merged — the branch deletion can fail after the merge lands. See the merge state reported below; do not assume this means nothing merged."
             fi
           else
-            gh pr merge --auto "$method" "$PR_URL" $del $match
+            gh pr merge --auto "${args[@]}" "$PR_URL" $del $match
           fi
 
           # --- Close the PR's linked issues ourselves ----------------------
