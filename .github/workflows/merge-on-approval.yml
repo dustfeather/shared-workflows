@@ -261,8 +261,11 @@ jobs:
             # unnoticed; the per_page=100 above happens to make the boundary land
             # on 250, but that is arithmetic to get wrong twice. Compare against the PR's own
             # declared commit count instead, which is a plain integer on the PR
-            # object and is not capped. Any shortfall, from the cap or a failed
-            # page, refuses.
+            # object and carries the TRUE total -- measured on NixOS/nixpkgs#560469,
+            # where `.commits` is 780 while the paginated commits listing returns
+            # exactly 250. So the two sides legitimately disagree past the cap and
+            # the refusal below fires there instead of failing open. Any shortfall,
+            # from the cap or a failed page, refuses.
             # Two reads, so the head can move between them. A push landing
             # after the commit list is fetched makes the declared count larger
             # and the mismatch would be blamed on the 250 cap, which is a wrong
