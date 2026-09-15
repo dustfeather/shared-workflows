@@ -25,6 +25,21 @@ name: Build and push image (reusable)
 #     uses: dustfeather/shared-workflows/.github/workflows/deploy-k8s.yml@v6
 #     with:
 #       image: ${{ needs.build.outputs.image }}
+#
+# `push: false` builds the image and throws it away, which is what a PR check
+# wants: it proves the Dockerfile and its base image still build, on the commit
+# under review, without publishing an image for work that may never land.
+#
+#   image:
+#     permissions: { contents: read, packages: write }
+#     uses: dustfeather/shared-workflows/.github/workflows/build-push-image.yml@v6
+#     with:
+#       push: false
+#
+# `packages: write` is still required there, and the reason is the permission
+# constraint above rather than an oversight: `permissions:` accepts no
+# expressions, so the build job below requests it unconditionally and a caller
+# granting less fails at validation with `startup_failure`.
 
 on:
   workflow_call:
@@ -54,9 +69,22 @@ on:
         description: Tag to push. Empty uses the commit SHA.
         type: string
         default: ""
+      push:
+        description: |
+          Push the built image to GHCR. False builds it and discards it — for a
+          PR check that wants the Dockerfile exercised but nothing published.
+          The registry build cache is not written either; see `build-cache`.
+        type: boolean
+        default: true
       build-cache:
         description: |
           Push and reuse a registry build cache at `<image-repo>:buildcache`.
+          Reading it is independent of `push`, but WRITING it is not: a build
+          with `push: false` only reads. `cache-to` is a registry write like any
+          other, so leaving it on would let a PR check mutate the cache tag every
+          caller of this image pulls from — a published artifact from an
+          unreviewed commit, which is the one thing `push: false` is there to
+          avoid.
         type: boolean
         default: true
       platforms:
@@ -72,7 +100,10 @@ on:
         default: "arc-df-shared-workflows"
     outputs:
       image:
-        description: Full reference of the pushed image, `<repo>:<tag>`.
+        description: |
+          Full reference of the built image, `<repo>:<tag>`. With `push: false`
+          nothing was uploaded under that reference, so a deploy job must not
+          consume this output from a build-only run.
         value: ${{ jobs.build.outputs.image }}
 
 permissions:
@@ -143,16 +174,24 @@ jobs:
         with:
           context: ${{ steps.img.outputs.context }}
           file: ${{ steps.img.outputs.file }}
-          push: true
+          push: ${{ inputs.push }}
           platforms: ${{ inputs.platforms }}
           tags: ${{ steps.img.outputs.ref }}
           cache-from: ${{ inputs.build-cache && format('type=registry,ref={0}:buildcache', steps.img.outputs.repo) || '' }}
-          cache-to: ${{ inputs.build-cache && format('type=registry,ref={0}:buildcache,mode=max', steps.img.outputs.repo) || '' }}
+          cache-to: ${{ inputs.push && inputs.build-cache && format('type=registry,ref={0}:buildcache,mode=max', steps.img.outputs.repo) || '' }}
 
       - name: Summary
         if: always()
         env:
           IMAGE_REF: ${{ steps.img.outputs.ref }}
+          PUSHED: ${{ inputs.push }}
         run: |
           set -eu
-          echo "### Image — \`${IMAGE_REF}\`" >> "$GITHUB_STEP_SUMMARY"
+          # Say which of the two it was. A summary naming a reference nobody can
+          # pull reads exactly like a successful push, and this line is the only
+          # thing most readers of a build-only run will look at.
+          if [ "$PUSHED" = "true" ]; then
+            echo "### Image — \`${IMAGE_REF}\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Image — \`${IMAGE_REF}\` (built only, not pushed)" >> "$GITHUB_STEP_SUMMARY"
+          fi
