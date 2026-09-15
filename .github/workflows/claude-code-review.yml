@@ -240,6 +240,40 @@ jobs:
         #
         # Scoped to the current head SHA: a review left on an earlier push
         # would otherwise mask a no-op on the push being checked.
+        #
+        # Scoped to the REVIEWER too, and that is not decoration. Replying to a
+        # review thread (`addPullRequestReviewThreadReply`, or the REST replies
+        # endpoint) makes GitHub manufacture a single-comment review authored by
+        # the replier, state COMMENTED, attached to the head SHA. So working the
+        # review loop creates exactly the objects a bare
+        # `commit_id + submitted_at` count accepts, and the guard's protection
+        # decayed as the loop progressed: round 1 guarded, every round after a
+        # reply not. Measured 2026-09-14 on ITGuys-RO/fleet-manager#164 run
+        # 34880008061 -- the action was skipped by the OIDC refusal above, the
+        # guard printed `Review confirmed (2 submitted)`, and both were reply
+        # wrappers under a human account. The step reported green on precisely
+        # the failure it exists to catch.
+        #
+        # Three predicates, because each covers a shape the others cannot:
+        #
+        #   .user.login == "claude[bot]"  -- MEASURED, not assumed. 40 reviewer
+        #     rows across dustfeather/shared-workflows#42 and
+        #     ITGuys-RO/fleet-manager#164, all `claude[bot]`; the bare login
+        #     `claude` appears nowhere. #46 proposed accepting both -- do not,
+        #     since `claude` is a registrable username and accepting it lets any
+        #     human holding it satisfy this check.
+        #   .user.type == "Bot"           -- defence in depth for the same reason.
+        #   a real verdict, or a COMMENTED review with a NON-EMPTY body
+        #     -- the reviewer's own `--allowed-tools` grants `gh api:*`, so the
+        #     agent can create reply wrappers itself, and an author filter alone
+        #     would then accept them. Every wrapper observed (71 of them across
+        #     those two PRs) has a zero-length body; every genuine review has
+        #     246-2595 characters. COMMENTED stays allowed because a real review
+        #     can be COMMENTED -- the body length, not the state, is what
+        #     separates the two.
+        #
+        # Widening any of the three re-opens a silent pass. Verify against real
+        # review JSON rather than reasoning about it.
         if: steps.codeql_gate.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -249,9 +283,15 @@ jobs:
         run: |
           set -u
           reviews=$(gh api "repos/$REPO/pulls/$PR/reviews" --paginate --jq \
-            "[.[] | select(.commit_id == \"$SHA\" and .submitted_at != null)] | length")
+            "[.[] | select(.commit_id == \"$SHA\"
+                and .submitted_at != null
+                and .user.type == \"Bot\"
+                and .user.login == \"claude[bot]\"
+                and (.state == \"APPROVED\"
+                     or .state == \"CHANGES_REQUESTED\"
+                     or (.state == \"COMMENTED\" and ((.body // \"\") | length) > 0)))] | length")
           if [ "${reviews:-0}" -eq 0 ]; then
-            echo "::error::Claude Code Review submitted no review on $SHA. Known causes: (1) this PR modifies the .github/workflows file which triggers the review job, so the action's OIDC token exchange is refused and it no-ops -- land the workflow change in its own PR first, then push this branch again; (2) the agent ran but never reached the closing \`gh pr review\` call, usually because a tool the prompt mandates is missing from --allowed-tools -- check the step log for permission_denials_count. The transcript is hidden unless the caller passes show-full-output: true, so re-run with that set to see which call was denied."
+            echo "::error::Claude Code Review submitted no review on $SHA. Known causes: (1) this PR modifies the .github/workflows file which triggers the review job, so the action's OIDC token exchange is refused and it no-ops -- land the workflow change in its own PR first, then push this branch again; (2) the agent ran but never reached the closing \`gh pr review\` call, usually because a tool the prompt mandates is missing from --allowed-tools -- check the step log for permission_denials_count. The transcript is hidden unless the caller passes show-full-output: true, so re-run with that set to see which call was denied. Note this counts reviews by claude[bot] only, and ignores the empty-bodied COMMENTED reviews GitHub creates as a side effect of replying to a review thread -- your own replies on this SHA will never satisfy it."
             exit 1
           fi
           echo "Review confirmed on $SHA ($reviews submitted)."
