@@ -267,6 +267,12 @@ RUN set -eux; \
 # is verified before install so a tampered/typosquatted release fails the build
 # rather than landing a trusted command rewriter. Bump RTK_SHA256 with the
 # version (get it from the release's checksums.txt for the musl asset).
+#
+# SECOND COPY: .github/workflows/claude.yml installs the same release when the
+# job runs on a GitHub-hosted runner, where this image is not in play. Bump
+# both together — otherwise the hosted and self-hosted paths rewrite commands
+# with different rtk versions and the difference only shows up as changed agent
+# behaviour, never as an error.
 ARG RTK_VERSION=0.42.0
 ARG RTK_SHA256=cdd4f87ac97ce958f71b53a991880d6adcc41cc5bca1044175a64630980152be
 RUN set -eux; \

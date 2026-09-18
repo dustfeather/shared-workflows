@@ -10,9 +10,17 @@ on:
         default: dustfeather
       runner:
         description: |
-          Self-hosted ARC scale-set label for the runner pool. Defaults to
-          `arc-df-shared-workflows`; each caller normally pins its own
-          scale-set (e.g. `arc-df-uninsta`, `arc-itguys-ro-invest`).
+          Runner label for this job. Defaults to `arc-df-shared-workflows`;
+          a caller pinning a self-hosted pool normally names its own scale-set
+          (e.g. `arc-df-uninsta`, `arc-itguys-ro-invest`).
+
+          A GitHub-hosted label (`ubuntu-latest`) is equally valid and is what
+          the interactive callers use: every ARC pool lands on the same
+          single 4-core node, where a runner pod reserves 1000m as IO
+          admission control, so the whole cluster admits two runner pods at a
+          time. An interactive Claude session is minutes of API wait, not of
+          local CPU or disk, so holding one of those two slots for it starves
+          real CI for no gain. See ITGuys-RO/k3s-cluster#16.
         type: string
         default: "arc-df-shared-workflows"
     secrets:
@@ -45,6 +53,37 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 1
+
+      # `rtk` is baked into the self-hosted runner image
+      # (runner-image/Dockerfile), so on an ARC pool this step is a version
+      # print and nothing else. On a GitHub-hosted runner it is load-bearing:
+      # the `settings:` input below wires `rtk hook claude` as a PreToolUse
+      # Bash hook, and a hook whose command does not exist fails on EVERY Bash
+      # call the agent makes — noisily, and after the job has already started,
+      # so it reads as an agent problem rather than a missing binary.
+      #
+      # Pinned to the same release and checksum as the image; bump both
+      # together or the hosted runner silently rewrites commands with a
+      # different rtk than the self-hosted one. The tarball is verified before
+      # install because this binary rewrites every command the agent runs.
+      - name: Ensure rtk is installed
+        env:
+          RTK_VERSION: "0.42.0"
+          RTK_SHA256: cdd4f87ac97ce958f71b53a991880d6adcc41cc5bca1044175a64630980152be
+        run: |
+          set -euo pipefail
+          if command -v rtk >/dev/null 2>&1; then
+            echo "rtk already present: $(rtk --version)"
+            exit 0
+          fi
+          curl -fsSL \
+            "https://github.com/rtk-ai/rtk/releases/download/v${RTK_VERSION}/rtk-x86_64-unknown-linux-musl.tar.gz" \
+            -o /tmp/rtk.tar.gz
+          echo "${RTK_SHA256}  /tmp/rtk.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/rtk.tar.gz -C /tmp
+          sudo install -m 0755 "$(find /tmp -maxdepth 2 -type f -name rtk | head -1)" /usr/local/bin/rtk
+          rm -f /tmp/rtk.tar.gz
+          rtk --version
 
       - name: Run Claude Code
         uses: anthropics/claude-code-action@v1
