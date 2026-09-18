@@ -170,6 +170,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v7
         with:
           context: ${{ steps.img.outputs.context }}
@@ -185,12 +186,24 @@ jobs:
         env:
           IMAGE_REF: ${{ steps.img.outputs.ref }}
           PUSHED: ${{ inputs.push }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
         run: |
           set -eu
-          # Say which of the two it was. A summary naming a reference nobody can
-          # pull reads exactly like a successful push, and this line is the only
-          # thing most readers of a build-only run will look at.
-          if [ "$PUSHED" = "true" ]; then
+          # Say which of the three it was. A summary naming a reference nobody
+          # can pull reads exactly like a successful push, and this line is the
+          # only thing most readers of a run will look at.
+          #
+          # IMAGE_REF is resolved from the job's inputs, not from anything the
+          # build produced, so it is non-empty whether or not an image exists —
+          # and `always()` means this step still runs when `Build and push`
+          # failed, or never ran at all because an earlier step did (reference
+          # resolution, GHCR login), which leaves BUILD_OUTCOME as `skipped`
+          # rather than `failure`. Hence the test is against `success` and not
+          # against `failure`. In that branch the reference is deliberately
+          # omitted: printing one nobody can pull is the whole bug.
+          if [ "$BUILD_OUTCOME" != "success" ]; then
+            echo "### Image — not built (build outcome: \`${BUILD_OUTCOME}\`)" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$PUSHED" = "true" ]; then
             echo "### Image — \`${IMAGE_REF}\`" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "### Image — \`${IMAGE_REF}\` (built only, not pushed)" >> "$GITHUB_STEP_SUMMARY"
