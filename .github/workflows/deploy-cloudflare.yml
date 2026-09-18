@@ -322,6 +322,7 @@ jobs:
           # The ${NPM_TOKEN} below is written LITERALLY: npm, pnpm and yarn all
           # expand env references when they READ .npmrc, so the token value
           # never lands on disk, in a cache layer or in an artifact.
+          # shellcheck disable=SC2016  # ${NPM_TOKEN} is written literally on purpose — see above.
           printf '//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n' >> "$HOME/.npmrc"
           echo "Wrote registry auth to ~/.npmrc (token read from env at use time)."
 
@@ -486,6 +487,7 @@ jobs:
           fi
 
           echo "Staging $(printf '%s\n' "$names" | wc -l) secret(s):"
+          # shellcheck disable=SC2086  # deliberate split: one name per printf argument, one per line.
           printf '  %s\n' $names
 
           {

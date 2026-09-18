@@ -109,9 +109,11 @@ jobs:
           fi
           base="${{ inputs.base-name }}"
           [ -z "$base" ] && base="${GITHUB_REPOSITORY##*/}"
-          echo "version=$next"     >> "$GITHUB_OUTPUT"
-          echo "tag=v$next"        >> "$GITHUB_OUTPUT"
-          echo "base=$base"        >> "$GITHUB_OUTPUT"
+          {
+            echo "version=$next"
+            echo "tag=v$next"
+            echo "base=$base"
+          } >> "$GITHUB_OUTPUT"
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag "v$next"
@@ -146,6 +148,7 @@ jobs:
           # The ${NPM_TOKEN} below is written LITERALLY: npm, pnpm and yarn all
           # expand env references when they READ .npmrc, so the token value
           # never lands on disk, in a cache layer or in an artifact.
+          # shellcheck disable=SC2016  # ${NPM_TOKEN} is written literally on purpose — see above.
           printf '//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n' >> "$HOME/.npmrc"
           echo "Wrote registry auth to ~/.npmrc (token read from env at use time)."
 

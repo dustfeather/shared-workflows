@@ -63,6 +63,32 @@ else
   fi
 fi
 
+# --- 3. workflow lint (actionlint + shellcheck) ----------------------------
+# Same gate CI runs in the `guard` job. Locally it uses whatever actionlint is
+# installed, while CI pins a version — so a skew surfaces as a CI-only finding.
+# Bump the local binary rather than suppressing it.
+#
+# The shellcheck binary is probed SEPARATELY and on purpose: actionlint drops
+# every shell check when it cannot find shellcheck and still exits 0, so
+# without this probe a clean run here would mean nothing.
+if ! command -v actionlint >/dev/null 2>&1; then
+  echo "pre-push: actionlint not found — skipping workflow lint" >&2
+  echo "pre-push: install it from https://github.com/rhysd/actionlint/releases to enable it" >&2
+elif ! command -v shellcheck >/dev/null 2>&1; then
+  echo "pre-push: shellcheck not found — skipping workflow lint" >&2
+  echo "pre-push: actionlint without it exits 0 over unchecked shell, so this skips rather than lying" >&2
+  echo "pre-push: install it with 'sudo apt-get install -y shellcheck' to enable it" >&2
+else
+  echo "pre-push: linting workflows with actionlint"
+  if ! actionlint; then
+    echo >&2
+    echo "pre-push: actionlint failed — push aborted." >&2
+    echo "pre-push: fix the finding, or add a scoped '# shellcheck disable=SCxxxx'" >&2
+    echo "pre-push: comment with a one-line reason if it is a false positive." >&2
+    failed=1
+  fi
+fi
+
 if [ "$failed" != 0 ]; then
   echo >&2
   echo "pre-push: override with 'git push --no-verify' if you are certain." >&2

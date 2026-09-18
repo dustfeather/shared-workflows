@@ -105,7 +105,7 @@ jobs:
           # All diagnostics go to stderr so they survive $() capture in callers.
           # Retries cover 429 (Retry-After honored) and 5xx (exponential backoff).
           gws_curl() {
-            local headers_file response http_code retry_after sleep_for
+            local headers_file response http_code retry_after
             headers_file=$(mktemp)
             trap 'rm -f "$headers_file"' RETURN
 

@@ -162,6 +162,7 @@ jobs:
           # The ${NPM_TOKEN} below is written LITERALLY: npm, pnpm and yarn all
           # expand env references when they READ .npmrc, so the token value
           # never lands on disk, in a cache layer or in an artifact.
+          # shellcheck disable=SC2016  # ${NPM_TOKEN} is written literally on purpose — see above.
           printf '//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n' >> "$HOME/.npmrc"
           echo "Wrote registry auth to ~/.npmrc (token read from env at use time)."
 
@@ -236,11 +237,13 @@ jobs:
           BLD:   ${{ inputs.script-build }}
         run: |
           has() { jq -e --arg s "$1" '.scripts[$s] // empty' package.json >/dev/null 2>&1 && echo true || echo false; }
-          echo "has_setup=$(has "$SETUP")"          >> "$GITHUB_OUTPUT"
-          echo "has_lint=$(has "$LINT")"            >> "$GITHUB_OUTPUT"
-          echo "has_test=$(has "$TEST")"            >> "$GITHUB_OUTPUT"
-          echo "has_typecheck=$(has "$TC")"         >> "$GITHUB_OUTPUT"
-          echo "has_build=$(has "$BLD")"            >> "$GITHUB_OUTPUT"
+          {
+            echo "has_setup=$(has "$SETUP")"
+            echo "has_lint=$(has "$LINT")"
+            echo "has_test=$(has "$TEST")"
+            echo "has_typecheck=$(has "$TC")"
+            echo "has_build=$(has "$BLD")"
+          } >> "$GITHUB_OUTPUT"
 
       # A caller that NAMES a script states an expectation, so a typo in that
       # name has to be loud: a skipped gate and a passing one are the same

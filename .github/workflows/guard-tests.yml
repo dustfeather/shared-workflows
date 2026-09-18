@@ -6,6 +6,12 @@ name: Guard tests
 # cannot be exercised from a local checkout — the suite extracts the block
 # verbatim from the shipped YAML and runs it against a stubbed `gh`.
 #
+# It also runs actionlint over every workflow in the repo, so the shell in a
+# `run:` block is linted before it ships to a caller rather than after. Both
+# checks live in the SAME `guard` job on purpose: `guard` is the one required
+# status check on `main`, so a step added here is enforced immediately, while a
+# new job would report and gate nothing until branch protection is edited.
+#
 # Deliberately its OWN workflow rather than a job in pr-checks.yml. That file
 # names itself in its own `paths-ignore`, so a PR touching only it creates no
 # run object at all and cannot land itself. A separate file has no such
@@ -34,3 +40,32 @@ jobs:
         # jq, which the stub is structurally blind to because the program rides
         # inside argv.
         run: bash tests/guard/all.sh
+
+      # actionlint parses every workflow and hands each `run:` block to
+      # shellcheck. Pinned by version AND sha256: an unpinned download makes
+      # the gate's verdict depend on whatever upstream published this morning,
+      # and a lint gate that changes its mind on its own is one people learn to
+      # ignore. Bump both values together.
+      #
+      # The shellcheck probe is not ceremony. actionlint SKIPS its shell checks
+      # entirely when it cannot find shellcheck on PATH, and still exits 0 — so
+      # without this the step would go green over a lint that never ran. It is
+      # preinstalled on ubuntu-latest; the probe catches an image change.
+      - name: Lint every workflow (actionlint + shellcheck)
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            echo "::error::shellcheck is not on PATH — actionlint would skip every shell check and still exit 0."
+            exit 1
+          fi
+          tgz="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL -o "${RUNNER_TEMP}/${tgz}" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tgz}"
+          echo "${ACTIONLINT_SHA256}  ${RUNNER_TEMP}/${tgz}" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/${tgz}" -C "${RUNNER_TEMP}" actionlint
+          # No path argument: actionlint discovers every workflow in the repo,
+          # so a newly added file is covered without editing this step.
+          "${RUNNER_TEMP}/actionlint" -color

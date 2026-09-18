@@ -153,7 +153,7 @@ jobs:
           fi
           if   printf '%s' "$msg" | grep -Fq '#major'; then bump=major
           elif printf '%s' "$msg" | grep -Fq '#minor'; then bump=minor
-          else bump=patch
+          else bump="patch"
           fi
           echo "Bump: $bump (from v${major}.${minor}.${patch})"
 
@@ -176,7 +176,7 @@ jobs:
             # range to narrow it and no self-healing. The push path above self
             # heals precisely because its next range excludes the commit.
             echo "::warning::A #major token appears on an unreleased commit that is not the head, and this run has no push range to narrow the scan to. Ignoring it rather than failing every future run — re-push with the token on the head subject to cut a major deliberately."
-            if printf '%s' "$msg" | grep -Fq '#minor'; then bump=minor; else bump=patch; fi
+            if printf '%s' "$msg" | grep -Fq '#minor'; then bump=minor; else bump="patch"; fi
             echo "Bump downgraded to: $bump"
           fi
 

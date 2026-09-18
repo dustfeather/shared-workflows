@@ -576,11 +576,13 @@ jobs:
 
           merge_rc=0
           if [ "$MODE" = "direct" ]; then
+            # shellcheck disable=SC2086  # deliberate: $del and $match are optional flag strings that must vanish when empty.
             gh pr merge "$PR_URL" "${args[@]}" $del $match || merge_rc=$?
             if [ "$merge_rc" -ne 0 ]; then
               echo "::error::gh pr merge exited ${merge_rc} for $PR_URL. It may still have merged — the branch deletion can fail after the merge lands. See the merge state reported below; do not assume this means nothing merged."
             fi
           else
+            # shellcheck disable=SC2086  # deliberate: $del and $match are optional flag strings that must vanish when empty.
             gh pr merge --auto "${args[@]}" "$PR_URL" $del $match
           fi
 
@@ -779,6 +781,7 @@ jobs:
             # just closed — a false alarm in the one block whose whole point is
             # that its annotations can be trusted.
             PAGE=50
+            # shellcheck disable=SC2016  # $owner/$name/$number/$page are GraphQL variables, not shell ones.
             if ! refs=$(gh api graphql -f query='
               query($owner:String!,$name:String!,$number:Int!,$page:Int!){
                 repository(owner:$owner,name:$name){

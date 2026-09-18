@@ -281,6 +281,7 @@ jobs:
             # this step had just closed — a false alarm in the one block whose
             # whole point is that its annotations can be trusted.
             PAGE=50
+            # shellcheck disable=SC2016  # $owner/$name/$number/$page are GraphQL variables, not shell ones.
             if ! refs=$(gh api graphql -f query='
               query($owner:String!,$name:String!,$number:Int!,$page:Int!){
                 repository(owner:$owner,name:$name){
