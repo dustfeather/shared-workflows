@@ -54,52 +54,17 @@ jobs:
         with:
           fetch-depth: 1
 
-      # `rtk` is baked into the self-hosted runner image
-      # (runner-image/Dockerfile), so on an ARC pool this step is a version
-      # print and nothing else. On a GitHub-hosted runner it is load-bearing:
-      # the `settings:` input below wires `rtk hook claude` as a PreToolUse
-      # Bash hook, and a hook whose command does not exist fails on EVERY Bash
-      # call the agent makes — noisily, and after the job has already started,
-      # so it reads as an agent problem rather than a missing binary.
-      #
-      # Pinned to the same release and checksum as the image; bump both
-      # together or the hosted runner silently rewrites commands with a
-      # different rtk than the self-hosted one. The tarball is verified before
-      # install because this binary rewrites every command the agent runs.
-      - name: Ensure rtk is installed
-        env:
-          RTK_VERSION: "0.42.0"
-          RTK_SHA256: cdd4f87ac97ce958f71b53a991880d6adcc41cc5bca1044175a64630980152be
-        run: |
-          set -euo pipefail
-          if command -v rtk >/dev/null 2>&1; then
-            echo "rtk already present: $(rtk --version)"
-            exit 0
-          fi
-          curl -fsSL \
-            "https://github.com/rtk-ai/rtk/releases/download/v${RTK_VERSION}/rtk-x86_64-unknown-linux-musl.tar.gz" \
-            -o /tmp/rtk.tar.gz
-          echo "${RTK_SHA256}  /tmp/rtk.tar.gz" | sha256sum -c -
-          tar -xzf /tmp/rtk.tar.gz -C /tmp
-          sudo install -m 0755 "$(find /tmp -maxdepth 2 -type f -name rtk | head -1)" /usr/local/bin/rtk
-          rm -f /tmp/rtk.tar.gz
-          rtk --version
-
       - name: Run Claude Code
         uses: anthropics/claude-code-action@v1
-        env:
-          # Disable rtk's once-a-day telemetry so its hook never makes network
-          # calls in CI.
-          RTK_TELEMETRY_DISABLED: "1"
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # Wire rtk as a PreToolUse hook so this interactive responder's Bash
-          # calls (git, gh, tests, builds, kubectl, …) are rewritten to their
-          # token-compressed `rtk ...` form. No --allowed-tools restriction here,
-          # so the rewritten commands need no extra allow-listing. The action
-          # seeds ~/.claude/settings.json from this input.
-          settings: |
-            {"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"rtk hook claude"}]}]}}
+          # No `settings:` input, and therefore no PreToolUse hook. In this
+          # tag-triggered mode the action supplies its own default
+          # `allowedTools` — read-only tools plus `git add`/`commit`/`rm` and
+          # the bundled push script — regardless of what `claude_args` says, so
+          # a command-rewriting hook could only ever have reached those few git
+          # calls. Anything broader was denied above the hook layer and the job
+          # still reported success.
           # Match the reusable review job: latest Opus, high effort, adaptive
           # thinking. A comment like "@claude review" lands here (interactive
           # mode), not in the auto-review workflow, so it gets the same depth.

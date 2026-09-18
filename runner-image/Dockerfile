@@ -40,10 +40,6 @@
 #   - code-review-graph: structural code-graph CLI + MCP server consumed by
 #     claude-code-review.yml so the review agent gets blast-radius / impact
 #     context (its `serve` is wired into the action via `--mcp-config`).
-#   - rtk (Rust Token Killer): compresses command output before it reaches the
-#     model. claude.yml + claude-code-review.yml wire it as a PreToolUse hook
-#     (`rtk hook claude`) via the action's `settings` input; baked here so any
-#     workflow on this runner can use it.
 #   - pr-review-toolkit@claude-plugins-official (Claude Code plugin), baked
 #     into /home/runner/.claude/plugins so claude-code-review.yml can fan the
 #     standard review track out to its specialist subagents
@@ -256,33 +252,6 @@ RUN set -eux; \
     python -m pip install --no-cache-dir --break-system-packages \
         "code-review-graph==${CRG_VERSION}"; \
     code-review-graph --version
-
-# rtk (Rust Token Killer): single static binary, pinned. Wired into the claude
-# workflows as a PreToolUse Bash hook (`rtk hook claude`) that rewrites commands
-# to their token-compressed `rtk ...` equivalents — so this binary can rewrite
-# every Bash command the review agent runs (incl. the mutating `gh pr review`).
-# Static musl build → no libc coupling to the base image. Telemetry is disabled
-# per-job via the workflow env (RTK_TELEMETRY_DISABLED), so no network egress
-# from the hook. SHA256-pinned against the release `checksums.txt`: the tarball
-# is verified before install so a tampered/typosquatted release fails the build
-# rather than landing a trusted command rewriter. Bump RTK_SHA256 with the
-# version (get it from the release's checksums.txt for the musl asset).
-#
-# SECOND COPY: .github/workflows/claude.yml installs the same release when the
-# job runs on a GitHub-hosted runner, where this image is not in play. Bump
-# both together — otherwise the hosted and self-hosted paths rewrite commands
-# with different rtk versions and the difference only shows up as changed agent
-# behaviour, never as an error.
-ARG RTK_VERSION=0.42.0
-ARG RTK_SHA256=cdd4f87ac97ce958f71b53a991880d6adcc41cc5bca1044175a64630980152be
-RUN set -eux; \
-    curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/v${RTK_VERSION}/rtk-x86_64-unknown-linux-musl.tar.gz" \
-        -o /tmp/rtk.tar.gz; \
-    echo "${RTK_SHA256}  /tmp/rtk.tar.gz" | sha256sum -c -; \
-    tar -xzf /tmp/rtk.tar.gz -C /tmp; \
-    install -m 0755 "$(find /tmp -maxdepth 2 -type f -name rtk | head -1)" /usr/local/bin/rtk; \
-    rm -rf /tmp/rtk.tar.gz; \
-    rtk --version
 
 USER runner
 
