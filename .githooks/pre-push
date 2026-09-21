@@ -6,7 +6,7 @@
 # else's repo, and for two of the checked failure modes that run has zero jobs,
 # no logs and no annotation.
 #
-# Two independent checks. Each probes for its OWN dependencies and skips only
+# Five independent checks. Each probes for its OWN dependencies and skips only
 # itself: an earlier bare exit on a missing PyYAML used to take the whole hook
 # with it, which would have meant the check CLAUDE.md calls mandatory was the
 # one a missing unrelated dependency silently dropped.

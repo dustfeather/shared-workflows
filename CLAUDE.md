@@ -62,9 +62,15 @@ Consequences a change here is most likely to get wrong:
   move the major tag, then add the caller.
   Within one major that lag self-heals at the next tag. ACROSS a major it does
   not: `tag-release.yml` re-points only the CURRENT major, so the v6 cut froze
-  `v5` exactly as the v5 cut froze `v4` at v4.14.2. **All five of this repo's own
-  pins were repointed to `@v6` by hand once v6.0.0 existed (#43)**, so its merges
-  now DO run the squash `--subject` and the bump-token guard described above. A
+  `v5` exactly as the v5 cut froze `v4` at v4.14.2. **This repo's own pins are currently
+  SPLIT**: `release-extension.yml`'s three nested calls are on `@v7`, while
+  `pr-merge.yml:108` and `pr-checks.yml:36` are still on the frozen `@v6` (all
+  five were repointed to `@v6` by hand at the v6 cut, #43; only three moved at
+  the v7 cut — tracked in #56, along with the `@v6` still shown in the usage
+  comments of `merge-on-approval.yml` and `build-push-image.yml`). Its merges
+  do run the squash `--subject` and the bump-token guard described above,
+  because those live on the `@v6` side and v6 already had them — but do not
+  read "the repo runs its own current workflows" into that. A
   pin left behind on a frozen major is the one case where the rest of this file
   describes behaviour the repo is not actually getting — check the pins first
   when something here does not match what you observe.

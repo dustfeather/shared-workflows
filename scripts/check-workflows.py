@@ -276,15 +276,34 @@ def pnpm_pin_drift(files):
                     f"AFTER the one that proves it green."
                 )
 
-    # Both directions. A workflow that calls the action but ships no guard is
-    # the copy-paste case: it passes every other check here while leaving a
-    # CALLER free to pass "12", which is the hole the guard exists to close.
+    # Both directions, counted per CALL SITE rather than per file. A workflow
+    # that calls the action but ships no guard is the copy-paste case: it
+    # passes every other check here while leaving a CALLER free to pass "12",
+    # which is the hole the guard exists to close.
+    #
+    # Per-file was the first version and it was a latent hole of exactly the
+    # same shape: two `uses: pnpm/action-setup` calls in different jobs are
+    # satisfied by ONE guard step, leaving the second job unguarded, and
+    # extract.sh has the same file-level granularity so neither side notices.
+    # All three workflows call the action once today, so nothing was wrong --
+    # but "nothing is wrong today" is what every fault in this PR looked like
+    # before the first shared-store job ran.
     for path in sorted(refs_by_file):
-        if not GUARD_LITERAL.search(text[path]):
+        calls = len(refs_by_file[path])
+        guards = len(GUARD_LITERAL.findall(text[path]))
+        if guards == 0:
             problems.append(
                 f"{path}: calls pnpm/action-setup but has no "
                 f"PNPM_BOOTSTRAP_VERSION guard step. A caller could pass any "
                 f"pnpm-version and nothing here would notice."
+            )
+        elif guards < calls:
+            problems.append(
+                f"{path}: calls pnpm/action-setup {calls} times but ships only "
+                f"{guards} PNPM_BOOTSTRAP_VERSION guard step(s). Each call "
+                f"needs its own -- a guard in one job does not run before the "
+                f"setup in another, so the unguarded one takes whatever "
+                f"pnpm-version the caller passes."
             )
 
     for path in files:

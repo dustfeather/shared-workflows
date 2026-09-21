@@ -289,5 +289,28 @@ case("a mention is not an invocation, so no env finding",
      {"guard-tests.yml": gate(runs=False), "node-test.yml": workflow()},
      "!effective env")
 
+# --- the guard presence check must count CALL SITES, not files -----------
+# Two `uses: pnpm/action-setup` in different jobs are satisfied by one guard
+# step under a per-file check, leaving the second job unguarded -- and
+# extract.sh has the same file-level granularity, so neither side notices.
+TWO_CALLS = workflow() + "  build:\n    runs-on: ubuntu-latest\n    steps:\n" \
+    f"      - uses: pnpm/action-setup@{SHA}\n"
+case("two call sites, one guard step",
+     {"guard-tests.yml": gate(), "node-test.yml": TWO_CALLS},
+     "ships only 1 PNPM_BOOTSTRAP_VERSION guard step")
+case("two call sites, two guard steps",
+     {"guard-tests.yml": gate(),
+      "node-test.yml": TWO_CALLS.replace(
+          f"      - uses: pnpm/action-setup@{SHA}\n",
+          "      - name: guard\n        env:\n"
+          '          PNPM_BOOTSTRAP_VERSION: "11.19.0"\n'
+          "        run: true\n"
+          f"      - uses: pnpm/action-setup@{SHA}\n", 1)},
+     None)
+# A file with no calls at all must not be told it is short of guards.
+case("no call sites: the count check stays silent",
+     {"guard-tests.yml": gate(), "node-test.yml": workflow(calls=False)},
+     "!ships only")
+
 print(f"\ncheck-workflows: {passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
