@@ -105,7 +105,7 @@ jobs:
     # tag-release.yml re-points only the CURRENT major, so the v5 cut stranded
     # v4 where it stood. A pin left on `@v4` does not silently inherit
     # anything; it keeps pre-v5 behaviour for good.
-    uses: dustfeather/shared-workflows/.github/workflows/merge-on-approval.yml@v6
+    uses: dustfeather/shared-workflows/.github/workflows/merge-on-approval.yml@v7
     with:
       runner: arc-df-shared-workflows
       # `direct`, not the reusable workflow's `auto` default, because

@@ -8,7 +8,7 @@
 #   concurrency: { group: release, cancel-in-progress: true }
 #   jobs:
 #     release:
-#       uses: dustfeather/shared-workflows/.github/workflows/release-extension.yml@v6
+#       uses: dustfeather/shared-workflows/.github/workflows/release-extension.yml@v7
 #       with:
 #         runner: arc-df-<repo>
 #         targets: '["chrome","firefox"]'   # discord-purge adds "userscript"
@@ -87,7 +87,7 @@ jobs:
     # The cost of waiting was one follow-up commit; the cost of being wrong
     # was every caller. v6.0.0 is cut, so these three now point at it (#43) --
     # which also stops them sitting on a frozen major.
-    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v6
+    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v7
     with:
       runner: ${{ inputs.runner }}
       # Forwarded so both jobs install the SAME pnpm. node-test.yml carries its
@@ -236,7 +236,7 @@ jobs:
   publish-chrome:
     needs: [prepare, build]
     if: contains(fromJSON(inputs.targets), 'chrome')
-    uses: dustfeather/shared-workflows/.github/workflows/publish-chrome.yml@v6
+    uses: dustfeather/shared-workflows/.github/workflows/publish-chrome.yml@v7
     with:
       runner: ${{ inputs.runner }}
       artifact-name: extensions-chrome
@@ -246,7 +246,7 @@ jobs:
   publish-firefox:
     needs: [prepare, build]
     if: contains(fromJSON(inputs.targets), 'firefox')
-    uses: dustfeather/shared-workflows/.github/workflows/publish-firefox.yml@v6
+    uses: dustfeather/shared-workflows/.github/workflows/publish-firefox.yml@v7
     with:
       runner: ${{ inputs.runner }}
       artifact-name: extensions-firefox
