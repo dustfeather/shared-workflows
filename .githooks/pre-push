@@ -93,7 +93,28 @@ else
   fi
 fi
 
-# --- 4. workflow lint (actionlint + shellcheck) ----------------------------
+# --- 4. fixture cases for check-workflows.py itself ------------------------
+# Check 1 runs the script; this runs its assertions against fixtures. Both are
+# needed: check 1 proves the tree is clean, this proves the script would still
+# say so if it were not. A regex that quietly stops matching passes check 1.
+if [ ! -f tests/check-workflows/run.py ]; then
+  : # suite absent on this ref -- nothing to run
+elif ! command -v python3 >/dev/null 2>&1; then
+  echo "pre-push: python3 not found -- skipping workflow-check fixtures" >&2
+elif ! python3 -c 'import yaml' 2>/dev/null; then
+  echo "pre-push: PyYAML not installed -- skipping workflow-check fixtures" >&2
+else
+  echo "pre-push: running the workflow-check fixtures"
+  if ! python3 tests/check-workflows/run.py; then
+    echo >&2
+    echo "pre-push: workflow-check fixtures failed -- push aborted." >&2
+    echo "pre-push: these assertions gate every caller from the one required" >&2
+    echo "pre-push: check on main, so a false positive reds the whole repo." >&2
+    failed=1
+  fi
+fi
+
+# --- 5. workflow lint (actionlint + shellcheck) ----------------------------
 # Same gate CI runs in the `guard` job. Locally it uses whatever actionlint is
 # installed, while CI pins a version — so a skew surfaces as a CI-only finding.
 # Bump the local binary rather than suppressing it.
