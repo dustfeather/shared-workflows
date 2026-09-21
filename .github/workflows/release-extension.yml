@@ -52,7 +52,16 @@ on:
           pnpm major version. Forwarded to the nested node-test.yml call as
           well, so `tests` and `build` always agree.
         type: string
-        default: "12"
+        # Must match the pnpm the ARC runner image ships (v11.19.0). Asking for
+        # any other version makes pnpm/action-setup run pnpm's SELF-INSTALLER,
+        # which installs pnpm THROUGH pnpm and therefore honours the container's
+        # shared `pnpm_config_store_dir`. pnpm lands in the shared store, the
+        # first job writes an entry missing @pnpm/exe.linux-x64, and every later
+        # job reuses it and dies with ERR_PNPM_BROKEN_PNPM_INSTALL. The first run
+        # passes, so a green PR is not evidence here -- v7.0.0 shipped "12" and
+        # uninsta's PR was green while its release on main failed minutes later.
+        # Raise this only together with the runner image.
+        default: "11"
 
 # Default for the whole file. `prepare` and `release` raise themselves to
 # `contents: write` for the version commit and the GitHub release; `build`,
