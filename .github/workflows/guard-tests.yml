@@ -57,6 +57,9 @@ jobs:
       - name: Static checks over the workflows (incl. the pnpm pin)
         env:
           CHECK_PNPM_BOOTSTRAP: "1"
+          # Lifts the raw.githubusercontent fetches off the per-IP anonymous
+          # rate limit, which is shared with every other job on the runner.
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml

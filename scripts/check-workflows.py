@@ -55,6 +55,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.request
 
 import yaml
@@ -176,6 +177,36 @@ SHA40 = re.compile(r"^[0-9a-f]{40}$")
 # copy cannot drift away from the default it is meant to mirror.
 GUARD_LITERAL = re.compile(r'^\s*PNPM_BOOTSTRAP_VERSION:\s*"([^"]+)"', re.MULTILINE)
 
+# raw.githubusercontent.com, retried and authenticated. This runs in `guard`,
+# the ONE required status check on main, and a hard failure there blocks even
+# pr-merge.yml's bot merge (github-actions[bot] is not an admin, so it cannot
+# bypass protection). Hard-on-CI is still right — "could not check" must not
+# read as "checked" — but it must not be one-shot: a rate-limit or a blip would
+# otherwise wedge the repo rather than raise a red advisory check.
+FETCH_ATTEMPTS = 3
+
+
+def fetch_json(url):
+    """GET url as JSON, retrying transient failures. Raises the last error."""
+    req = urllib.request.Request(url)
+    # The anonymous raw.githubusercontent limit is per-IP and shared with every
+    # other job on the runner. A token lifts the request out of it; absent one
+    # (local pre-push) the anonymous path still works.
+    token = os.environ.get("GITHUB_TOKEN")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    last = None
+    for attempt in range(FETCH_ATTEMPTS):
+        try:
+            with urllib.request.urlopen(req, timeout=20) as fh:
+                return json.loads(fh.read())
+        except Exception as exc:  # noqa: BLE001 — retry anything transient
+            last = exc
+            if attempt < FETCH_ATTEMPTS - 1:
+                time.sleep(2 ** attempt)
+    raise last
+
+
 BOOTSTRAP_LOCKS = {
     "pnpm-lock.json": "node_modules/pnpm",
     "exe-lock.json": "node_modules/@pnpm/exe",
@@ -199,8 +230,11 @@ def pnpm_pin_drift(files):
     problems = []
     defaults = {}
     refs_by_file = {}
+    text = {}
 
     for path in files:
+        with open(path) as fh:
+            text[path] = fh.read()
         try:
             doc = load(path)
         except yaml.YAMLError:
@@ -211,7 +245,7 @@ def pnpm_pin_drift(files):
             if isinstance(spec, dict) and "default" in spec:
                 defaults[path] = str(spec["default"])
 
-        found = ACTION_SETUP_REF.findall(open(path).read())
+        found = ACTION_SETUP_REF.findall(text[path])
         if found:
             refs_by_file[path] = found
 
@@ -225,8 +259,19 @@ def pnpm_pin_drift(files):
                     f"AFTER the one that proves it green."
                 )
 
+    # Both directions. A workflow that calls the action but ships no guard is
+    # the copy-paste case: it passes every other check here while leaving a
+    # CALLER free to pass "12", which is the hole the guard exists to close.
+    for path in sorted(refs_by_file):
+        if not GUARD_LITERAL.search(text[path]):
+            problems.append(
+                f"{path}: calls pnpm/action-setup but has no "
+                f"PNPM_BOOTSTRAP_VERSION guard step. A caller could pass any "
+                f"pnpm-version and nothing here would notice."
+            )
+
     for path in files:
-        for literal in GUARD_LITERAL.findall(open(path).read()):
+        for literal in GUARD_LITERAL.findall(text[path]):
             declared = defaults.get(path)
             if declared is None:
                 problems.append(
@@ -278,8 +323,7 @@ def pnpm_pin_drift(files):
                     f"{sha}/src/install-pnpm/bootstrap/{lock}"
                 )
                 try:
-                    with urllib.request.urlopen(url, timeout=20) as fh:
-                        data = json.loads(fh.read())
+                    data = fetch_json(url)
                 except Exception as exc:  # noqa: BLE001 — offline, rate-limited, DNS…
                     msg = (
                         f"could not read {lock} at {sha[:7]} ({exc}); "
