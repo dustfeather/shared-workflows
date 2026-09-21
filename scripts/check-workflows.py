@@ -337,6 +337,22 @@ def pnpm_pin_drift(files):
                         f"pnpm bootstrap left unverified"
                     )
                     if os.environ.get("CI"):
+                        # Hard here by design, which means an outage that
+                        # outlasts the retry budget -- notably a contents-API
+                        # rate limit, which resets hourly, not in the ~3s three
+                        # attempts cover -- reds the one required check and so
+                        # blocks the bot merge on EVERY pr in the repo, not just
+                        # this one. That is the cost of refusing to let "could
+                        # not check" read as "checked", and it is the right
+                        # trade, but a wedged repo must not also be a puzzle.
+                        # Name the way out in the failure itself.
+                        msg += (
+                            ". This is the one required check on main, so it "
+                            "blocks the bot merge repo-wide until it passes. "
+                            "If the cause is transient (rate limit: resets "
+                            "hourly), re-run the job. enforce_admins is false, "
+                            "so an owner can merge directly meanwhile."
+                        )
                         problems.append(msg)
                     else:
                         print(f"  note: {msg}", file=sys.stderr)
