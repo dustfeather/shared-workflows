@@ -65,16 +65,38 @@ def workflow(default="11.19.0", ref=SHA, literal="11.19.0", calls=True):
 # CHECK_PNPM_BOOTSTRAP=1 and not PNPM_BOOTSTRAP_SOFT, so without it EVERY case
 # would carry an extra unrelated finding and the assertions would be about the
 # wrong thing.
-def gate(check="1", soft=None):
-    env = [f'          CHECK_PNPM_BOOTSTRAP: "{check}"'] if check is not None else []
+def gate(check="1", soft=None, *, top_env=None, decoy=False, runs=True):
+    """`decoy` adds a SECOND python step that does not run the script -- the
+    shape that made a file-wide env union wrong, since the variable could sit
+    on the wrong step. `top_env` sets workflow-level env, which Actions applies
+    BEFORE the step's, so a step value must win over it."""
+    def envblock(pairs, indent):
+        if not pairs:
+            return []
+        return [f"{indent}env:"] + [f"{indent}  {k}: \"{v}\"" for k, v in pairs]
+
+    step_env = []
+    if check is not None:
+        step_env.append(("CHECK_PNPM_BOOTSTRAP", check))
     if soft is not None:
-        env.append(f'          PNPM_BOOTSTRAP_SOFT: "{soft}"')
-    return "\n".join(
-        ["on:", "  push:", "jobs:", "  guard:", "    runs-on: ubuntu-latest", "    steps:",
-         "      - name: static checks"]
-        + (["        env:"] + env if env else [])
-        + ["        run: python3 scripts/check-workflows.py"]
-    ) + "\n"
+        step_env.append(("PNPM_BOOTSTRAP_SOFT", soft))
+
+    out = ["on:", "  push:"]
+    out += envblock(list((top_env or {}).items()), "")
+    out += ["jobs:", "  guard:", "    runs-on: ubuntu-latest", "    steps:"]
+    if decoy:
+        out += [
+            "      - name: fixture cases",
+            "        run: python3 tests/check-workflows/run.py",
+        ]
+    out += ["      - name: static checks"]
+    out += envblock(step_env, "        ")
+    out += [
+        "        run: python3 scripts/check-workflows.py"
+        if runs
+        else "        run: echo 'python3 scripts/check-workflows.py'  # not run"
+    ]
+    return "\n".join(out) + "\n"
 
 
 passed = failed = 0
@@ -161,7 +183,7 @@ case("guard literal with no input to mirror",
 # --- the gate's own assertions -------------------------------------------
 case("gate does not enable the bootstrap check",
      {"guard-tests.yml": gate(check=None), "node-test.yml": workflow()},
-     "no step sets CHECK_PNPM_BOOTSTRAP=1")
+     "without CHECK_PNPM_BOOTSTRAP=1 in its effective env")
 case("gate takes the soft opt-out",
      {"guard-tests.yml": gate(soft="1"), "node-test.yml": workflow()},
      "sets PNPM_BOOTSTRAP_SOFT")
@@ -226,6 +248,46 @@ case("bootstrap check refuses on a non-single-valued pin",
      {"guard-tests.yml": gate(), "a.yml": workflow(), "b.yml": workflow(ref=OTHER_SHA)},
      "the SHA or the default is not single-valued",
      env={"CHECK_PNPM_BOOTSTRAP": "1"}, fetch=lockfile("11.19.0"))
+
+# --- the gate assertion must be STEP-scoped, not file-scoped -------------
+# A union over every env: map in the file asserts only that the file SOMEWHERE
+# sets the variable. guard-tests.yml has two python steps, so the union passes
+# while the step that actually runs the script never reads the lockfiles.
+DECOY_RUN = "        run: python3 tests/check-workflows/run.py"
+
+
+def on_decoy(g, *pairs):
+    env = "\n".join(f'          {k}: "{v}"' for k, v in pairs)
+    return g.replace(DECOY_RUN, f"        env:\n{env}\n{DECOY_RUN}")
+
+
+case("env on a DIFFERENT python step does not count",
+     {"guard-tests.yml": on_decoy(gate(check=None, decoy=True), ("CHECK_PNPM_BOOTSTRAP", "1")),
+      "node-test.yml": workflow()},
+     "without CHECK_PNPM_BOOTSTRAP=1 in its effective env")
+case("SOFT on a DIFFERENT step does not fire the finding",
+     {"guard-tests.yml": on_decoy(gate(decoy=True), ("PNPM_BOOTSTRAP_SOFT", "1")),
+      "node-test.yml": workflow()},
+     "!PNPM_BOOTSTRAP_SOFT")
+# Actions applies workflow env BEFORE the step's, so the step wins. Getting the
+# order backwards turns a correct per-step "1" into a false failure on the one
+# required check on main.
+case("step env beats a wrong workflow-level value",
+     {"guard-tests.yml": gate(check="1", top_env={"CHECK_PNPM_BOOTSTRAP": "0"}),
+      "node-test.yml": workflow()},
+     None)
+case("workflow-level value alone still reaches the step",
+     {"guard-tests.yml": gate(check=None, top_env={"CHECK_PNPM_BOOTSTRAP": "1"}),
+      "node-test.yml": workflow()},
+     None)
+# Naming the script is not running it: the finding must be about the gate not
+# gating, never about a step that merely mentions the path.
+case("no step actually runs the script",
+     {"guard-tests.yml": gate(runs=False), "node-test.yml": workflow()},
+     "no step runs scripts/check-workflows.py")
+case("a mention is not an invocation, so no env finding",
+     {"guard-tests.yml": gate(runs=False), "node-test.yml": workflow()},
+     "!effective env")
 
 print(f"\ncheck-workflows: {passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

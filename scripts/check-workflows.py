@@ -171,6 +171,16 @@ ACTION_SETUP_REF = re.compile(
     r"^\s*(?:-\s*)?uses:\s*pnpm/action-setup@(\S+)", re.MULTILINE
 )
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
+# Matches the invocation, not a mention. Anchored at the start of a line
+# (after optional env-var prefixes, which is how the pre-push hook calls it),
+# so `echo "python3 scripts/check-workflows.py"`, a comment naming the script
+# and a heredoc quoting it do not count as the gate running it. The looser
+# version of this matched the echo, which would have let a step that only
+# PRINTS the command satisfy the assertion.
+SCRIPT_INVOCATION = re.compile(
+    r"^[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*=\S*[ \t]+)*python3?[ \t]+\S*scripts/check-workflows\.py",
+    re.MULTILINE,
+)
 
 # The run-time guard step's copy of the bootstrap version. It exists because a
 # CALLER's `pnpm-version` is invisible to this script; this check exists so that
@@ -316,32 +326,61 @@ def pnpm_pin_drift(files):
             gate_doc = load(gate_path) or {}
         except yaml.YAMLError:
             gate_doc = {}
-        gate_env = {}
+
+        # Find the STEP that actually runs this script, and read ITS effective
+        # env. A union over every env: map in the file would assert only that
+        # the file somewhere sets the variable -- which is the same green no-op
+        # the ambient-CI switch was replaced to close. guard-tests.yml already
+        # has two python steps, so moving CHECK_PNPM_BOOTSTRAP onto the wrong
+        # one, or splitting this step in two, would leave the bootstrap
+        # lockfiles unread while the assertion still called the gate strict.
+        #
+        # Precedence is workflow -> job -> step, LAST wins, which is Actions'
+        # own order. The union got this backwards as well: it applied the
+        # workflow-level map after the step maps, so a top-level
+        # CHECK_PNPM_BOOTSTRAP: "0" would have overridden a correct per-step
+        # "1" and reddened the one required check for no reason.
+        gate_steps = []
         for job in (gate_doc.get("jobs") or {}).values():
             if not isinstance(job, dict):
                 continue
-            for scope in [job.get("env")] + [
-                s.get("env") for s in (job.get("steps") or []) if isinstance(s, dict)
-            ]:
-                if isinstance(scope, dict):
-                    gate_env.update(scope)
-        for scope in [gate_doc.get("env")]:
-            if isinstance(scope, dict):
-                gate_env.update(scope)
+            for step in job.get("steps") or []:
+                if not isinstance(step, dict):
+                    continue
+                if SCRIPT_INVOCATION.search(str(step.get("run") or "")):
+                    env = {}
+                    for scope in (
+                        gate_doc.get("env"),
+                        job.get("env"),
+                        step.get("env"),
+                    ):
+                        if isinstance(scope, dict):
+                            env.update(scope)
+                    gate_steps.append((step.get("name") or "<unnamed step>", env))
 
-        if str(gate_env.get("CHECK_PNPM_BOOTSTRAP", "")) != "1":
+        if not gate_steps:
             problems.append(
-                f"{gate_path}: no step sets CHECK_PNPM_BOOTSTRAP=1, so the "
-                f"bootstrap lockfiles are never read in CI and the pin's third "
-                f"leg goes unverified while this script still exits 0."
+                f"{gate_path}: no step runs scripts/check-workflows.py. These "
+                f"assertions then gate nothing in CI, while the pre-push hook "
+                f"keeps passing locally and nothing says the difference."
             )
-        if "PNPM_BOOTSTRAP_SOFT" in gate_env:
-            problems.append(
-                f"{gate_path}: sets PNPM_BOOTSTRAP_SOFT, which downgrades an "
-                f"unreachable bootstrap lockfile to a note. In the one required "
-                f"check on main that turns 'could not verify the pin' into a "
-                f"green run. Only the pre-push hook may opt out."
-            )
+        for step_name, env in gate_steps:
+            if str(env.get("CHECK_PNPM_BOOTSTRAP", "")) != "1":
+                problems.append(
+                    f"{gate_path}: the step {step_name!r} runs "
+                    f"check-workflows.py without CHECK_PNPM_BOOTSTRAP=1 in its "
+                    f"effective env, so it never reads the bootstrap lockfiles "
+                    f"and the pin's third leg goes unverified while the step "
+                    f"still exits 0."
+                )
+            if "PNPM_BOOTSTRAP_SOFT" in env:
+                problems.append(
+                    f"{gate_path}: the step {step_name!r} sets "
+                    f"PNPM_BOOTSTRAP_SOFT, which downgrades an unreachable "
+                    f"bootstrap lockfile to a note. In the one required check "
+                    f"on main that turns 'could not verify the pin' into a "
+                    f"green run. Only the pre-push hook may opt out."
+                )
 
     distinct_defaults = set(defaults.values())
     if len(distinct_defaults) > 1:

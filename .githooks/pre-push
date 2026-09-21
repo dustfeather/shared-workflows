@@ -76,7 +76,9 @@ fi
 # Same reasoning as the suite above, and the same "runs on every push" rule:
 # its extractor re-slices the block out of all three workflows and refuses
 # unless they are byte-identical, so it catches a copy drifting out of lockstep
-# no matter which file the push touched. No jq -- this guard is pure shell.
+# no matter which file the push touched. No jq: the guard under test is pure
+# shell, though extract.sh slices it out with a python3 heredoc -- which is why
+# the probe below tests python3 and not jq.
 if [ ! -f tests/pnpm-guard/run.sh ]; then
   : # suite absent on this ref -- nothing to run
 elif ! command -v python3 >/dev/null 2>&1; then
