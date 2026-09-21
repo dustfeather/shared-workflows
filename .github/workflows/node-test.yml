@@ -12,7 +12,12 @@ on:
         type: string
         default: auto
       pnpm-version:
-        description: pnpm version (used only when package-manager resolves to pnpm)
+        description: |
+          pnpm version (used only when package-manager resolves to pnpm).
+          Effectively single-valued on a runner pool that exports a shared pnpm
+          store: any value but the default is rejected before setup, because
+          there it is not a preference but a break. Elsewhere it warns and
+          proceeds. See the comment below.
         type: string
         # Must match the pnpm that pnpm/action-setup BOOTSTRAPS, which is not the
         # pnpm the runner image ships: the action `rm -rf`s its dest dir and runs
@@ -217,6 +222,18 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$REQUESTED" = "$PNPM_BOOTSTRAP_VERSION" ]; then
+            exit 0
+          fi
+          # The poisoning needs a store SHARED between jobs -- that is what makes
+          # one job's bad entry another job's crash. On the ARC pools that is
+          # pnpm_config_store_dir, exported at container level (k3s-cluster
+          # bootstrap/values-common.yaml). Without it -- runner: ubuntu-latest,
+          # or any pool not exporting it -- the self-installer writes to a
+          # per-job store and nothing breaks, so refusing there would be a hard
+          # failure with no underlying bug. Warn instead: the value is still
+          # wrong, it is just not fatal here.
+          if [ -z "${pnpm_config_store_dir:-}" ]; then
+            echo "::warning::pnpm-version is '$REQUESTED' rather than the pinned action's bootstrap $PNPM_BOOTSTRAP_VERSION, so pnpm/action-setup will run 'pnpm self-update'. Harmless on this runner because no shared pnpm store is exported, but it breaks every job after the first on a pool that exports pnpm_config_store_dir. Drop the input to take the default."
             exit 0
           fi
           echo "::error::pnpm-version is '$REQUESTED', but pnpm/action-setup at the SHA pinned in this workflow bootstraps $PNPM_BOOTSTRAP_VERSION. Any other value makes the action run 'pnpm self-update', which installs pnpm THROUGH pnpm into the shared pnpm_config_store_dir. The first job succeeds and every later one dies with ERR_PNPM_BROKEN_PNPM_INSTALL. Remove the pnpm-version input to take the default."

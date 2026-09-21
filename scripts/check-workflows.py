@@ -177,7 +177,7 @@ SHA40 = re.compile(r"^[0-9a-f]{40}$")
 # copy cannot drift away from the default it is meant to mirror.
 GUARD_LITERAL = re.compile(r'^\s*PNPM_BOOTSTRAP_VERSION:\s*"([^"]+)"', re.MULTILINE)
 
-# raw.githubusercontent.com, retried and authenticated. This runs in `guard`,
+# The GitHub contents API, retried and authenticated. This runs in `guard`,
 # the ONE required status check on main, and a hard failure there blocks even
 # pr-merge.yml's bot merge (github-actions[bot] is not an admin, so it cannot
 # bypass protection). Hard-on-CI is still right — "could not check" must not
@@ -189,9 +189,16 @@ FETCH_ATTEMPTS = 3
 def fetch_json(url):
     """GET url as JSON, retrying transient failures. Raises the last error."""
     req = urllib.request.Request(url)
-    # The anonymous raw.githubusercontent limit is per-IP and shared with every
-    # other job on the runner. A token lifts the request out of it; absent one
-    # (local pre-push) the anonymous path still works.
+    req.add_header("Accept", "application/vnd.github.raw+json")
+    req.add_header("X-GitHub-Api-Version", "2022-11-28")
+    # api.github.com, NOT raw.githubusercontent.com. raw does not fall back to
+    # anonymous on an Authorization header it cannot validate -- it answers 404
+    # (measured: valid token 200, malformed token 404, no header 200). Sending
+    # `github.token`, an installation token with no grant on pnpm/action-setup,
+    # therefore risked turning every guard run into a hard 404 on the one
+    # required check on main. The contents API is documented to take the token
+    # and is where it actually raises the limit, 60 -> 1000/hr unauthenticated
+    # to authenticated. Without a token it still answers, on the 60/hr tier.
     token = os.environ.get("GITHUB_TOKEN")
     if token:
         req.add_header("Authorization", f"Bearer {token}")
@@ -319,8 +326,8 @@ def pnpm_pin_drift(files):
             sha, want = pinned[0], next(iter(distinct_defaults))
             for lock, key in BOOTSTRAP_LOCKS.items():
                 url = (
-                    "https://raw.githubusercontent.com/pnpm/action-setup/"
-                    f"{sha}/src/install-pnpm/bootstrap/{lock}"
+                    "https://api.github.com/repos/pnpm/action-setup/contents/"
+                    f"src/install-pnpm/bootstrap/{lock}?ref={sha}"
                 )
                 try:
                     data = fetch_json(url)
