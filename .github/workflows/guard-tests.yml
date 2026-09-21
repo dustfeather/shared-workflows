@@ -48,12 +48,17 @@ jobs:
       # caught by running anything, only by asserting it.
       #
       # CHECK_PNPM_BOOTSTRAP=1 makes the script read the action's committed
-      # bootstrap lockfiles at the pinned SHA. Here that is a hard failure
-      # (CI=true is set by the runner), because the network is reliable and a
+      # bootstrap lockfiles at the pinned SHA, through the GitHub contents API.
+      # Here that is a hard failure (CI=true is set by the runner), because a
       # Dependabot SHA bump is exactly the automated path that would otherwise
       # move the bootstrap out from under the default with every static
       # assertion still green. In the pre-push hook the same failure is only a
       # note, so an offline push is not blocked by a check that never disagreed.
+      #
+      # GITHUB_TOKEN below goes to api.github.com, NOT raw.githubusercontent.com
+      # — see fetch_json() for why that distinction is load-bearing rather than
+      # incidental. Three attempts with backoff, so one blip is not a wedged
+      # required check.
       - name: Static checks over the workflows (incl. the pnpm pin)
         env:
           CHECK_PNPM_BOOTSTRAP: "1"

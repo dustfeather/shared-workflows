@@ -342,7 +342,21 @@ def pnpm_pin_drift(files):
                         print(f"  note: {msg}", file=sys.stderr)
                     continue
                 got = ((data.get("packages") or {}).get(key) or {}).get("version")
-                if got != want:
+                # A missing key is not a version drift. It means the lockfile's
+                # shape changed under us -- `packages` restructured, the entry
+                # renamed -- and reporting that as "bootstraps None" sends the
+                # reader looking for a version move that never happened. Same
+                # class as the fetch failure above: could not read, not disagreed.
+                if got is None:
+                    msg = (
+                        f"could not read the bootstrap version from {lock} at "
+                        f"{sha[:7]}: no \"version\" under packages[{key!r}]"
+                    )
+                    if os.environ.get("CI"):
+                        problems.append(msg)
+                    else:
+                        print(f"  note: {msg}", file=sys.stderr)
+                elif got != want:
                     problems.append(
                         f"pnpm-version defaults to {want}, but "
                         f"action-setup@{sha[:7]} bootstraps {got} in {lock}. "
