@@ -28,7 +28,10 @@ elif ! python3 -c 'import yaml' 2>/dev/null; then
   echo "pre-push: install it with 'pip install --user pyyaml' to enable them" >&2
 else
   echo "pre-push: checking workflows"
-  if ! python3 scripts/check-workflows.py; then
+  # CHECK_PNPM_BOOTSTRAP: also read pnpm/action-setup bootstrap lockfiles at
+  # the pinned SHA and confirm the pnpm-version default still equals them. Soft
+  # on network failure, hard on an actual mismatch.
+  if ! CHECK_PNPM_BOOTSTRAP=1 python3 scripts/check-workflows.py; then
     echo >&2
     echo "pre-push: workflow checks failed — push aborted." >&2
     echo "pre-push: these break every caller, so fix before pushing." >&2

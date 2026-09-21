@@ -8,7 +8,7 @@
 #   concurrency: { group: release, cancel-in-progress: true }
 #   jobs:
 #     release:
-#       uses: dustfeather/shared-workflows/.github/workflows/release-extension.yml@v6
+#       uses: dustfeather/shared-workflows/.github/workflows/release-extension.yml@v7
 #       with:
 #         runner: arc-df-<repo>
 #         targets: '["chrome","firefox"]'   # discord-purge adds "userscript"
@@ -89,9 +89,18 @@ jobs:
     # empty logs, every caller at once.
     #
     # The cost of waiting was one follow-up commit; the cost of being wrong
-    # was every caller. v6.0.0 is cut, so these three now point at it (#43) --
-    # which also stops them sitting on a frozen major.
-    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v6
+    # was every caller. So these three only ever point at a major that is
+    # ALREADY cut: v6.0.0 when that was current (#43), v7.0.0 now -- which also
+    # stops them sitting on a frozen major.
+    #
+    # Moving them matters for this `tests` job specifically. `pnpm-version` is
+    # forwarded below, but the pnpm/action-setup SHA pin is NOT an input -- it
+    # lives inside node-test.yml. On frozen `@v6` that call resolved
+    # v6.2.4's node-test.yml, whose `uses: pnpm/action-setup@v6` is a floating
+    # tag: the forwarded 11.19.0 matched its bootstrap only by luck, and a
+    # bootstrap bump upstream would have broken `tests` while `build` in this
+    # same file stayed pinned and green.
+    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v7
     with:
       runner: ${{ inputs.runner }}
       # Forwarded so both jobs install the SAME pnpm. node-test.yml carries its
@@ -240,7 +249,7 @@ jobs:
   publish-chrome:
     needs: [prepare, build]
     if: contains(fromJSON(inputs.targets), 'chrome')
-    uses: dustfeather/shared-workflows/.github/workflows/publish-chrome.yml@v6
+    uses: dustfeather/shared-workflows/.github/workflows/publish-chrome.yml@v7
     with:
       runner: ${{ inputs.runner }}
       artifact-name: extensions-chrome
@@ -250,7 +259,7 @@ jobs:
   publish-firefox:
     needs: [prepare, build]
     if: contains(fromJSON(inputs.targets), 'firefox')
-    uses: dustfeather/shared-workflows/.github/workflows/publish-firefox.yml@v6
+    uses: dustfeather/shared-workflows/.github/workflows/publish-firefox.yml@v7
     with:
       runner: ${{ inputs.runner }}
       artifact-name: extensions-firefox

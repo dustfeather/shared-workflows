@@ -23,6 +23,21 @@ Each check exists because it already shipped a break:
                         as a hard error, and the implicit default is far wider
                         than anything here needs.
 
+  pnpm-pin-drift        the `pnpm-version` default must be identical in every
+                        workflow that declares it, and every
+                        `pnpm/action-setup@` must be pinned to the SAME commit
+                        SHA. That version is safe only because it equals the
+                        BOOTSTRAP version the action installs at that SHA — the
+                        action never reads the runner image's pnpm. Move one
+                        without the other and pnpm's self-installer really runs,
+                        installs pnpm THROUGH pnpm into the shared store, and
+                        every job after the first dies with
+                        ERR_PNPM_BROKEN_PNPM_INSTALL. The FIRST run passes, so
+                        no PR can catch this; hence a static check.
+                        CHECK_PNPM_BOOTSTRAP=1 additionally verifies the default
+                        against the action's committed bootstrap lockfiles over
+                        the network.
+
   escalating-permission a called workflow may not request MORE token
                         permission than the calling job grants, and
                         `permissions:` takes no expressions — so a job asking
@@ -37,8 +52,10 @@ Exit 1 on any finding. Run from the repo root.
 
 import glob
 import json
+import os
 import re
 import sys
+import urllib.request
 
 import yaml
 
@@ -149,6 +166,114 @@ def check(path):
     return problems
 
 
+ACTION_SETUP_REF = re.compile(
+    r"^\s*(?:-\s*)?uses:\s*pnpm/action-setup@(\S+)", re.MULTILINE
+)
+SHA40 = re.compile(r"^[0-9a-f]{40}$")
+
+BOOTSTRAP_LOCKS = {
+    "pnpm-lock.json": "node_modules/pnpm",
+    "exe-lock.json": "node_modules/@pnpm/exe",
+}
+
+
+def pnpm_pin_drift(files):
+    """Cross-file: the pnpm pin is a three-way agreement, not a per-file value.
+
+    `pnpm-version` is safe at exactly one value — the one pnpm/action-setup
+    BOOTSTRAPS. The action never consults the runner image: it wipes its dest
+    dir, `npm ci`s its own committed bootstrap lockfile, then runs
+    `pnpm self-update <the input>` unconditionally. Equal to the bootstrap that
+    is a no-op. Anything else really installs — through pnpm, so it honours the
+    container's shared `pnpm_config_store_dir` — and every job after the first
+    reuses a store entry missing @pnpm/exe.linux-x64 and dies.
+
+    A PR cannot catch it, because the FIRST run is the one that passes. So the
+    invariant is asserted statically instead: one default, one SHA.
+    """
+    problems = []
+    defaults = {}
+    refs_by_file = {}
+
+    for path in files:
+        try:
+            doc = load(path)
+        except yaml.YAMLError:
+            continue  # check() already reports the parse error
+        on = on_block(doc)
+        if isinstance(on, dict) and isinstance(on.get("workflow_call"), dict):
+            spec = (on["workflow_call"].get("inputs") or {}).get("pnpm-version")
+            if isinstance(spec, dict) and "default" in spec:
+                defaults[path] = str(spec["default"])
+
+        found = ACTION_SETUP_REF.findall(open(path).read())
+        if found:
+            refs_by_file[path] = found
+
+    for path, refs in sorted(refs_by_file.items()):
+        for ref in refs:
+            if not SHA40.match(ref):
+                problems.append(
+                    f"{path}: `pnpm/action-setup@{ref}` is a floating ref. Pin "
+                    f"the commit SHA — the action can otherwise bump its "
+                    f"bootstrap pnpm under us, and the break lands on the job "
+                    f"AFTER the one that proves it green."
+                )
+
+    distinct_defaults = set(defaults.values())
+    if len(distinct_defaults) > 1:
+        problems.append(
+            "the `pnpm-version` defaults disagree: "
+            + ", ".join(f"{p} -> {v}" for p, v in sorted(defaults.items()))
+            + ". Every workflow declaring it must carry the same exact version."
+        )
+
+    pinned = sorted({r for refs in refs_by_file.values() for r in refs if SHA40.match(r)})
+    if len(pinned) > 1:
+        problems.append(
+            "pnpm/action-setup is pinned to more than one SHA: "
+            + ", ".join(pinned)
+            + ". One SHA means one bootstrap version; several cannot all match "
+            "a single default."
+        )
+
+    # The network half, which the pre-push hook enables. A version MISMATCH is
+    # a hard finding; a network FAILURE is not, or every push from a plane
+    # would be blocked by a check that never actually disagreed with anything.
+    if os.environ.get("CHECK_PNPM_BOOTSTRAP") == "1":
+        if len(pinned) != 1 or len(distinct_defaults) != 1:
+            problems.append(
+                "CHECK_PNPM_BOOTSTRAP=1 but the SHA or the default is not "
+                "single-valued; fix the findings above first."
+            )
+        else:
+            sha, want = pinned[0], next(iter(distinct_defaults))
+            for lock, key in BOOTSTRAP_LOCKS.items():
+                url = (
+                    "https://raw.githubusercontent.com/pnpm/action-setup/"
+                    f"{sha}/src/install-pnpm/bootstrap/{lock}"
+                )
+                try:
+                    with urllib.request.urlopen(url, timeout=20) as fh:
+                        data = json.loads(fh.read())
+                except Exception as exc:  # noqa: BLE001 — offline, rate-limited, DNS…
+                    print(
+                        f"  note: could not read {lock} at {sha[:7]} ({exc}); "
+                        f"pnpm bootstrap left unverified",
+                        file=sys.stderr,
+                    )
+                    continue
+                got = ((data.get("packages") or {}).get(key) or {}).get("version")
+                if got != want:
+                    problems.append(
+                        f"pnpm-version defaults to {want}, but "
+                        f"action-setup@{sha[:7]} bootstraps {got} in {lock}. "
+                        f"self-update would really run."
+                    )
+
+    return problems
+
+
 def main():
     files = sorted(glob.glob(".github/workflows/*.yml"))
     if not files:
@@ -160,6 +285,8 @@ def main():
             found.extend(check(path))
         except yaml.YAMLError as exc:
             found.append(f"{path}: YAML parse error: {exc}")
+
+    found.extend(pnpm_pin_drift(files))
 
     for problem in found:
         print(f"  {problem}")
