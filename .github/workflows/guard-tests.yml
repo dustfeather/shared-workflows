@@ -41,6 +41,18 @@ jobs:
         # inside argv.
         run: bash tests/guard/all.sh
 
+      # The pnpm guard is a separate slice with its own extractor, so it gets
+      # its own step rather than joining all.sh: a failure here means the
+      # pnpm-version branch logic moved, which is a different diagnosis from a
+      # bump-token guard failure and should not arrive wearing its name.
+      #
+      # extract.sh also asserts the three shipped copies are byte-identical, so
+      # this step fails on drift between the workflows as well as on a broken
+      # branch. That matters because the guard runs in every caller and only
+      # one copy is exercised here.
+      - name: Extract the pnpm-version guard from the YAML and run its suite
+        run: bash tests/pnpm-guard/run.sh
+
       # The pnpm pin is a three-way agreement -- one `pnpm-version` default,
       # one `pnpm/action-setup@<sha>`, and that SHA's bootstrap version -- and
       # the fault it guards against passes its own PR: the first job writes the
@@ -62,8 +74,20 @@ jobs:
       - name: Static checks over the workflows (incl. the pnpm pin)
         env:
           CHECK_PNPM_BOOTSTRAP: "1"
-          # Lifts the raw.githubusercontent fetches off the per-IP anonymous
-          # rate limit, which is shared with every other job on the runner.
+          # pnpm_pin_drift() downgrades an unreachable bootstrap lockfile to a
+          # stderr note unless CI is set, so that an offline pre-push is not
+          # blocked by a check that never disagreed. Declared here rather than
+          # inherited from the runner: this is the one required check on main,
+          # and if the value ever stopped arriving, the network half would
+          # quietly become a note, the script would exit 0, and the gate would
+          # go green having verified nothing. "Could not check" must never read
+          # as "checked" here, so the step states the switch it depends on.
+          CI: "true"
+          # Raises the contents-API limit from 60 to 1000 requests/hour. It goes
+          # to api.github.com, NOT raw.githubusercontent.com -- see fetch_json()
+          # for the measured reason that distinction is load-bearing: raw
+          # answers 404, not 200, to an Authorization header it cannot validate,
+          # and github.token carries no grant on pnpm/action-setup.
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail

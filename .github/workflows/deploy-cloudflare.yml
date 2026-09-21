@@ -377,6 +377,13 @@ jobs:
           REQUESTED: ${{ inputs.pnpm-version }}
         run: |
           set -euo pipefail
+          # pnpm-guard-slice-begin -- tests/pnpm-guard/extract.sh re-extracts
+          # everything between these markers from all three workflows, asserts
+          # the three copies are byte-identical, and runs the result. Anchor on
+          # the markers, never on a line of the code under test: an edit that
+          # removes the anchor makes the extractor silently slice somewhere
+          # else, and the suite then reports ordinary-looking failures against
+          # code nobody is testing.
           if [ "$REQUESTED" = "$PNPM_BOOTSTRAP_VERSION" ]; then
             exit 0
           fi
@@ -394,6 +401,7 @@ jobs:
           fi
           echo "::error::pnpm-version is '$REQUESTED', but pnpm/action-setup at the SHA pinned in this workflow bootstraps $PNPM_BOOTSTRAP_VERSION. Any other value makes the action run 'pnpm self-update', which installs pnpm THROUGH pnpm into the shared pnpm_config_store_dir. The first job succeeds and every later one dies with ERR_PNPM_BROKEN_PNPM_INSTALL. Remove the pnpm-version input to take the default."
           exit 1
+          # pnpm-guard-slice-end
 
       - if: steps.pm.outputs.pm == 'pnpm'
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6

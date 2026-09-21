@@ -66,7 +66,28 @@ else
   fi
 fi
 
-# --- 3. workflow lint (actionlint + shellcheck) ----------------------------
+# --- 3. pnpm-version guard suite (python3) ---------------------------------
+# Same reasoning as the suite above, and the same "runs on every push" rule:
+# its extractor re-slices the block out of all three workflows and refuses
+# unless they are byte-identical, so it catches a copy drifting out of lockstep
+# no matter which file the push touched. No jq -- this guard is pure shell.
+if [ ! -f tests/pnpm-guard/run.sh ]; then
+  : # suite absent on this ref -- nothing to run
+elif ! command -v python3 >/dev/null 2>&1; then
+  echo "pre-push: python3 not found -- skipping pnpm-version guard suite" >&2
+else
+  echo "pre-push: running the pnpm-version guard suite"
+  if ! bash tests/pnpm-guard/run.sh; then
+    echo >&2
+    echo "pre-push: pnpm-version guard suite failed -- push aborted." >&2
+    echo "pre-push: this guard is what keeps a caller off a pnpm the pinned" >&2
+    echo "pre-push: action does not bootstrap, and its warn branch exits 0 --" >&2
+    echo "pre-push: a mistake there is green until it reaches a shared store." >&2
+    failed=1
+  fi
+fi
+
+# --- 4. workflow lint (actionlint + shellcheck) ----------------------------
 # Same gate CI runs in the `guard` job. Locally it uses whatever actionlint is
 # installed, while CI pins a version — so a skew surfaces as a CI-only finding.
 # Bump the local binary rather than suppressing it.
