@@ -41,6 +41,27 @@ jobs:
         # inside argv.
         run: bash tests/guard/all.sh
 
+      # The pnpm pin is a three-way agreement -- one `pnpm-version` default,
+      # one `pnpm/action-setup@<sha>`, and that SHA's bootstrap version -- and
+      # the fault it guards against passes its own PR: the first job writes the
+      # broken shared-store entry, a later one trips over it. So it cannot be
+      # caught by running anything, only by asserting it.
+      #
+      # CHECK_PNPM_BOOTSTRAP=1 makes the script read the action's committed
+      # bootstrap lockfiles at the pinned SHA. Here that is a hard failure
+      # (CI=true is set by the runner), because the network is reliable and a
+      # Dependabot SHA bump is exactly the automated path that would otherwise
+      # move the bootstrap out from under the default with every static
+      # assertion still green. In the pre-push hook the same failure is only a
+      # note, so an offline push is not blocked by a check that never disagreed.
+      - name: Static checks over the workflows (incl. the pnpm pin)
+        env:
+          CHECK_PNPM_BOOTSTRAP: "1"
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          python3 scripts/check-workflows.py
+
       # actionlint parses every workflow and hands each `run:` block to
       # shellcheck. Pinned by version AND sha256: an unpinned download makes
       # the gate's verdict depend on whatever upstream published this morning,

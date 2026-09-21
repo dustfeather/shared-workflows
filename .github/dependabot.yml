@@ -31,8 +31,22 @@ updates:
     # merging ships to every consumer on their next run. Read the changelog for
     # the caller-visible break and pick the #minor/#major token deliberately.
     #
-    # The group below only becomes load-bearing if pins ever move to specific
-    # versions or SHAs. Harmless until then.
+    # The group below IS load-bearing now. node-test.yml, deploy-cloudflare.yml
+    # and release-extension.yml pin `pnpm/action-setup` to a commit SHA, which
+    # the graph records as an exact requirement -- so Dependabot will open
+    # SHA-bump PRs against it, and those arrive as patch/minor, not major.
+    #
+    # Such a PR passes every static assertion in scripts/check-workflows.py --
+    # still one SHA, still one default -- while silently moving the version the
+    # action BOOTSTRAPS away from the `pnpm-version` default. That is exactly
+    # the break the pin exists to prevent, and the first run of it goes green.
+    #
+    # Deliberately NOT ignored here: the guard job runs the bootstrap check with
+    # CHECK_PNPM_BOOTSTRAP=1, so the PR fails loudly and names the new version,
+    # which is the signal you want. An `ignore` entry would instead freeze the
+    # action forever and silently. Merging such a PR means editing the
+    # `pnpm-version` default and the PNPM_BOOTSTRAP_VERSION guards in the same
+    # commit -- see the comment on that input in node-test.yml.
     groups:
       actions-minor-patch:
         update-types:

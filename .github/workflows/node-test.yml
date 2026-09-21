@@ -199,6 +199,29 @@ jobs:
           else                              echo "pm=npm"  >> "$GITHUB_OUTPUT"
           fi
 
+      # A caller can pass any string, and the static check in
+      # scripts/check-workflows.py cannot see it -- it only compares the defaults
+      # declared in this repo. "12" was the shipped default in v7.0.0, so a repo
+      # that pinned it explicitly while debugging those failures would keep the
+      # exact break the pin fixes, and the floating @v7 tag would look inert.
+      #
+      # Fail here, before the action runs, rather than at the ERR_PNPM_BROKEN_
+      # PNPM_INSTALL that lands on the SECOND job with nothing naming the cause.
+      # PNPM_BOOTSTRAP_VERSION must equal the pnpm-version default above;
+      # scripts/check-workflows.py asserts that it does.
+      - name: Reject a pnpm-version the pinned action does not bootstrap
+        if: steps.pm.outputs.pm == 'pnpm'
+        env:
+          PNPM_BOOTSTRAP_VERSION: "11.19.0"
+          REQUESTED: ${{ inputs.pnpm-version }}
+        run: |
+          set -euo pipefail
+          if [ "$REQUESTED" = "$PNPM_BOOTSTRAP_VERSION" ]; then
+            exit 0
+          fi
+          echo "::error::pnpm-version is '$REQUESTED', but pnpm/action-setup at the SHA pinned in this workflow bootstraps $PNPM_BOOTSTRAP_VERSION. Any other value makes the action run 'pnpm self-update', which installs pnpm THROUGH pnpm into the shared pnpm_config_store_dir. The first job succeeds and every later one dies with ERR_PNPM_BROKEN_PNPM_INSTALL. Remove the pnpm-version input to take the default."
+          exit 1
+
       - if: steps.pm.outputs.pm == 'pnpm'
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         env:

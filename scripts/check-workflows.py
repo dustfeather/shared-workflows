@@ -171,6 +171,11 @@ ACTION_SETUP_REF = re.compile(
 )
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 
+# The run-time guard step's copy of the bootstrap version. It exists because a
+# CALLER's `pnpm-version` is invisible to this script; this check exists so that
+# copy cannot drift away from the default it is meant to mirror.
+GUARD_LITERAL = re.compile(r'^\s*PNPM_BOOTSTRAP_VERSION:\s*"([^"]+)"', re.MULTILINE)
+
 BOOTSTRAP_LOCKS = {
     "pnpm-lock.json": "node_modules/pnpm",
     "exe-lock.json": "node_modules/@pnpm/exe",
@@ -220,6 +225,21 @@ def pnpm_pin_drift(files):
                     f"AFTER the one that proves it green."
                 )
 
+    for path in files:
+        for literal in GUARD_LITERAL.findall(open(path).read()):
+            declared = defaults.get(path)
+            if declared is None:
+                problems.append(
+                    f"{path}: PNPM_BOOTSTRAP_VERSION is set here, but this "
+                    f"workflow declares no `pnpm-version` input for it to mirror."
+                )
+            elif literal != declared:
+                problems.append(
+                    f"{path}: the run-time guard checks {literal} while the "
+                    f"`pnpm-version` default is {declared}. They mirror the same "
+                    f"bootstrap version and must be equal."
+                )
+
     distinct_defaults = set(defaults.values())
     if len(distinct_defaults) > 1:
         problems.append(
@@ -237,9 +257,13 @@ def pnpm_pin_drift(files):
             "a single default."
         )
 
-    # The network half, which the pre-push hook enables. A version MISMATCH is
-    # a hard finding; a network FAILURE is not, or every push from a plane
-    # would be blocked by a check that never actually disagreed with anything.
+    # The network half, which the pre-push hook and the guard job both enable.
+    # A version MISMATCH is always a hard finding. A network FAILURE is one only
+    # under CI: on a runner, "could not check" must not read as "checked", since
+    # this is the ONLY assertion that catches the SHA moving to a commit with a
+    # different bootstrap -- the shape a Dependabot bump arrives in. Locally it
+    # is a note, so a push from a plane is not blocked by a check that never
+    # actually disagreed with anything.
     if os.environ.get("CHECK_PNPM_BOOTSTRAP") == "1":
         if len(pinned) != 1 or len(distinct_defaults) != 1:
             problems.append(
@@ -257,11 +281,14 @@ def pnpm_pin_drift(files):
                     with urllib.request.urlopen(url, timeout=20) as fh:
                         data = json.loads(fh.read())
                 except Exception as exc:  # noqa: BLE001 — offline, rate-limited, DNS…
-                    print(
-                        f"  note: could not read {lock} at {sha[:7]} ({exc}); "
-                        f"pnpm bootstrap left unverified",
-                        file=sys.stderr,
+                    msg = (
+                        f"could not read {lock} at {sha[:7]} ({exc}); "
+                        f"pnpm bootstrap left unverified"
                     )
+                    if os.environ.get("CI"):
+                        problems.append(msg)
+                    else:
+                        print(f"  note: {msg}", file=sys.stderr)
                     continue
                 got = ((data.get("packages") or {}).get(key) or {}).get("version")
                 if got != want:
