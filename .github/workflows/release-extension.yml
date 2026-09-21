@@ -96,6 +96,16 @@ jobs:
     # ALREADY cut: v6.0.0 when that was current (#43), v7.0.0 now -- which also
     # stops them sitting on a frozen major.
     #
+    # Read that rule together with the bump a repointing commit takes, because
+    # the two are coupled. tag-release.yml re-points only the CURRENT major, so
+    # a commit that repoints these to @vN and also cuts vN+1 freezes @vN at the
+    # release before it -- and these three then resolve a copy of node-test.yml
+    # that predates whatever the commit was fixing, while the `build` job in
+    # this same file stays on its pinned SHA and stays green. Half the file
+    # fixed, half not, silently. Repointing to @vN is therefore only safe on a
+    # patch or minor of vN. If a change here ever has to be major, cut the
+    # major first and repoint these in the follow-up, never both at once.
+    #
     # Moving them matters for this `tests` job specifically. `pnpm-version` is
     # forwarded below, but the pnpm/action-setup SHA pin is NOT an input -- it
     # lives inside node-test.yml. On frozen `@v6` that call resolved
