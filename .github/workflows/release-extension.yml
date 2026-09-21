@@ -16,7 +16,9 @@
 #       secrets: inherit
 #
 # Repo contract (uniform across all extension repos):
-#   - pnpm (packageManager pinned, pnpm-lock.yaml committed)
+#   - pnpm, with pnpm-lock.yaml committed. Do NOT pin "packageManager" in
+#     package.json: this workflow passes a version to pnpm/action-setup, and
+#     the action hard-errors when both sources are present.
 #   - a `build:<target>` script per declared target that:
 #       * reads the version from $EXT_VERSION and stamps its own manifest(s)
 #       * writes the FINISHED artifact to dist-artifacts/<base>-<target>-<tag>.<ext>
@@ -45,6 +47,10 @@ on:
       node-version:
         type: string
         default: "26"
+      pnpm-version:
+        description: pnpm major version (this workflow always installs with pnpm)
+        type: string
+        default: "12"
 
 # Default for the whole file. `prepare` and `release` raise themselves to
 # `contents: write` for the version commit and the GitHub release; `build`,
@@ -167,7 +173,7 @@ jobs:
           npm_config_fetch_timeout: "120000"
           npm_config_fetch_retry_maxtimeout: "120000"
         with:
-          version: 10
+          version: ${{ inputs.pnpm-version }}
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
