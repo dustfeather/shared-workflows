@@ -292,6 +292,57 @@ def pnpm_pin_drift(files):
                     f"bootstrap version and must be equal."
                 )
 
+    # The gate that runs this script must not opt out of its own strictness.
+    # PNPM_BOOTSTRAP_SOFT turns an unreachable lockfile into a stderr note, so
+    # a step that sets it alongside CHECK_PNPM_BOOTSTRAP=1 reports success
+    # having verified nothing -- and does it on the one required check on main,
+    # where nothing downstream would notice. The pre-push hook is allowed to
+    # opt out; the workflow is not, and this is what makes "not declared" an
+    # enforced property rather than a comment asking nicely.
+    # Read the parsed env: maps, never the file text. A text scan matches the
+    # comment explaining WHY the variable is absent, so the check would fire on
+    # its own documentation -- and the obvious "fix" is to delete the comment,
+    # which is the opposite of what is wanted.
+    gate = "guard-tests.yml"
+    gate_path = next((p for p in files if p.endswith(gate)), None)
+    if gate_path is None:
+        problems.append(
+            f"{gate} is missing. It carries the `guard` job, which is the one "
+            f"required status check on main and the only place these "
+            f"assertions run in CI."
+        )
+    else:
+        try:
+            gate_doc = load(gate_path) or {}
+        except yaml.YAMLError:
+            gate_doc = {}
+        gate_env = {}
+        for job in (gate_doc.get("jobs") or {}).values():
+            if not isinstance(job, dict):
+                continue
+            for scope in [job.get("env")] + [
+                s.get("env") for s in (job.get("steps") or []) if isinstance(s, dict)
+            ]:
+                if isinstance(scope, dict):
+                    gate_env.update(scope)
+        for scope in [gate_doc.get("env")]:
+            if isinstance(scope, dict):
+                gate_env.update(scope)
+
+        if str(gate_env.get("CHECK_PNPM_BOOTSTRAP", "")) != "1":
+            problems.append(
+                f"{gate_path}: no step sets CHECK_PNPM_BOOTSTRAP=1, so the "
+                f"bootstrap lockfiles are never read in CI and the pin's third "
+                f"leg goes unverified while this script still exits 0."
+            )
+        if "PNPM_BOOTSTRAP_SOFT" in gate_env:
+            problems.append(
+                f"{gate_path}: sets PNPM_BOOTSTRAP_SOFT, which downgrades an "
+                f"unreachable bootstrap lockfile to a note. In the one required "
+                f"check on main that turns 'could not verify the pin' into a "
+                f"green run. Only the pre-push hook may opt out."
+            )
+
     distinct_defaults = set(defaults.values())
     if len(distinct_defaults) > 1:
         problems.append(
@@ -310,12 +361,20 @@ def pnpm_pin_drift(files):
         )
 
     # The network half, which the pre-push hook and the guard job both enable.
-    # A version MISMATCH is always a hard finding. A network FAILURE is one only
-    # under CI: on a runner, "could not check" must not read as "checked", since
-    # this is the ONLY assertion that catches the SHA moving to a commit with a
-    # different bootstrap -- the shape a Dependabot bump arrives in. Locally it
-    # is a note, so a push from a plane is not blocked by a check that never
-    # actually disagreed with anything.
+    # A version MISMATCH is always a hard finding. A network FAILURE is one too,
+    # BY DEFAULT: "could not check" must not read as "checked", since this is
+    # the ONLY assertion that catches the SHA moving to a commit with a
+    # different bootstrap -- the shape a Dependabot bump arrives in.
+    #
+    # PNPM_BOOTSTRAP_SOFT=1 downgrades that to a stderr note, so a push from a
+    # plane is not blocked by a check that never actually disagreed. The switch
+    # is deliberately an opt-IN to silence rather than an opt-in to strictness.
+    # It used to read ambient CI, which meant the strict behaviour depended on
+    # a variable no caller declared: tidying an env: block, or moving the step
+    # to a job that did not export it, would have turned the one required check
+    # on main into a green no-op with no annotation saying so. Now the silent
+    # state needs someone to ask for it by name, and the pre-push hook is the
+    # only caller that does.
     if os.environ.get("CHECK_PNPM_BOOTSTRAP") == "1":
         if len(pinned) != 1 or len(distinct_defaults) != 1:
             problems.append(
@@ -336,7 +395,7 @@ def pnpm_pin_drift(files):
                         f"could not read {lock} at {sha[:7]} ({exc}); "
                         f"pnpm bootstrap left unverified"
                     )
-                    if os.environ.get("CI"):
+                    if not os.environ.get("PNPM_BOOTSTRAP_SOFT"):
                         # Hard here by design, which means an outage that
                         # outlasts the retry budget -- notably a contents-API
                         # rate limit, which resets hourly, not in the ~3s three
@@ -368,7 +427,7 @@ def pnpm_pin_drift(files):
                         f"could not read the bootstrap version from {lock} at "
                         f"{sha[:7]}: no \"version\" under packages[{key!r}]"
                     )
-                    if os.environ.get("CI"):
+                    if not os.environ.get("PNPM_BOOTSTRAP_SOFT"):
                         problems.append(msg)
                     else:
                         print(f"  note: {msg}", file=sys.stderr)

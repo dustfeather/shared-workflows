@@ -29,9 +29,15 @@ elif ! python3 -c 'import yaml' 2>/dev/null; then
 else
   echo "pre-push: checking workflows"
   # CHECK_PNPM_BOOTSTRAP: also read pnpm/action-setup bootstrap lockfiles at
-  # the pinned SHA and confirm the pnpm-version default still equals them. Soft
-  # on network failure, hard on an actual mismatch.
-  if ! CHECK_PNPM_BOOTSTRAP=1 python3 scripts/check-workflows.py; then
+  # the pinned SHA and confirm the pnpm-version default still equals them.
+  # PNPM_BOOTSTRAP_SOFT: an unreachable lockfile is a note here rather than a
+  # refusal, so a push with no network is not blocked by a check that never
+  # disagreed with anything. A real MISMATCH is still hard, soft or not.
+  #
+  # This hook is the ONLY place that opts out. The script is strict by default
+  # precisely so the gate in CI cannot lose its strictness by omission, which
+  # is what an ambient-CI switch would have allowed.
+  if ! CHECK_PNPM_BOOTSTRAP=1 PNPM_BOOTSTRAP_SOFT=1 python3 scripts/check-workflows.py; then
     echo >&2
     echo "pre-push: workflow checks failed — push aborted." >&2
     echo "pre-push: these break every caller, so fix before pushing." >&2

@@ -61,11 +61,19 @@ jobs:
       #
       # CHECK_PNPM_BOOTSTRAP=1 makes the script read the action's committed
       # bootstrap lockfiles at the pinned SHA, through the GitHub contents API.
-      # Here that is a hard failure (CI=true is set by the runner), because a
-      # Dependabot SHA bump is exactly the automated path that would otherwise
-      # move the bootstrap out from under the default with every static
-      # assertion still green. In the pre-push hook the same failure is only a
-      # note, so an offline push is not blocked by a check that never disagreed.
+      # An unreachable lockfile is a hard failure here by DEFAULT -- nothing in
+      # this step has to ask for that -- because a Dependabot SHA bump is
+      # exactly the automated path that would otherwise move the bootstrap out
+      # from under the default with every static assertion still green. Only
+      # the pre-push hook opts out, by setting PNPM_BOOTSTRAP_SOFT=1, so an
+      # offline push is not blocked by a check that never disagreed.
+      #
+      # That direction is deliberate. This step used to get its strictness from
+      # ambient CI, which made the required check depend on a variable it never
+      # declared: tidy the env: block, or move this to a job that does not
+      # export it, and the gate silently becomes a green no-op. Now silence
+      # needs an affirmative opt-in, and check-workflows.py asserts this step
+      # does not take it.
       #
       # GITHUB_TOKEN below goes to api.github.com, NOT raw.githubusercontent.com
       # — see fetch_json() for why that distinction is load-bearing rather than
@@ -74,15 +82,10 @@ jobs:
       - name: Static checks over the workflows (incl. the pnpm pin)
         env:
           CHECK_PNPM_BOOTSTRAP: "1"
-          # pnpm_pin_drift() downgrades an unreachable bootstrap lockfile to a
-          # stderr note unless CI is set, so that an offline pre-push is not
-          # blocked by a check that never disagreed. Declared here rather than
-          # inherited from the runner: this is the one required check on main,
-          # and if the value ever stopped arriving, the network half would
-          # quietly become a note, the script would exit 0, and the gate would
-          # go green having verified nothing. "Could not check" must never read
-          # as "checked" here, so the step states the switch it depends on.
-          CI: "true"
+          # No PNPM_BOOTSTRAP_SOFT here, on purpose: its absence is what makes
+          # an unreachable lockfile red. check-workflows.py fails if this step
+          # ever sets it, so the opt-out cannot be added back by a tidy-up.
+          #
           # Raises the contents-API limit from 60 to 1000 requests/hour. It goes
           # to api.github.com, NOT raw.githubusercontent.com -- see fetch_json()
           # for the measured reason that distinction is load-bearing: raw
