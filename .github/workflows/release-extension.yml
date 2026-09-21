@@ -48,7 +48,9 @@ on:
         type: string
         default: "26"
       pnpm-version:
-        description: pnpm major version (this workflow always installs with pnpm)
+        description: |
+          pnpm major version. Forwarded to the nested node-test.yml call as
+          well, so `tests` and `build` always agree.
         type: string
         default: "12"
 
@@ -88,6 +90,11 @@ jobs:
     uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v6
     with:
       runner: ${{ inputs.runner }}
+      # Forwarded so both jobs install the SAME pnpm. node-test.yml carries its
+      # own default, so leaving this out would let `tests` and `build` resolve
+      # different majors and run --frozen-lockfile against one lockfile from two
+      # pnpm versions -- the exact split this input exists to close.
+      pnpm-version: ${{ inputs.pnpm-version }}
 
   prepare:
     needs: tests
