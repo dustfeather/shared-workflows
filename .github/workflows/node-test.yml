@@ -14,7 +14,7 @@ on:
       pnpm-version:
         description: pnpm major version (used only when package-manager resolves to pnpm)
         type: string
-        default: "10"
+        default: "12"
       package-manager-cache:
         description: |
           Restore/save the package manager's download cache via

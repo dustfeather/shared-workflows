@@ -50,7 +50,8 @@ install and before everything else, audit included:
 
 Rename it with `with: script-setup: …`. The name is namespaced on
 purpose: `prepare` already fires on install and `prebuild` already fires
-around `build` (pnpm 10, no config needed), so a hook on either would run
+around `build` (no config needed on any supported pnpm), so a hook on
+either would run
 at times nobody asked for, and twice when a step also invoked it.
 
 Keeping the logic in package.json rather than in workflow YAML is the
