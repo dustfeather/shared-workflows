@@ -28,7 +28,16 @@ elif ! python3 -c 'import yaml' 2>/dev/null; then
   echo "pre-push: install it with 'pip install --user pyyaml' to enable them" >&2
 else
   echo "pre-push: checking workflows"
-  if ! python3 scripts/check-workflows.py; then
+  # CHECK_PNPM_BOOTSTRAP: also read pnpm/action-setup bootstrap lockfiles at
+  # the pinned SHA and confirm the pnpm-version default still equals them.
+  # PNPM_BOOTSTRAP_SOFT: an unreachable lockfile is a note here rather than a
+  # refusal, so a push with no network is not blocked by a check that never
+  # disagreed with anything. A real MISMATCH is still hard, soft or not.
+  #
+  # This hook is the ONLY place that opts out. The script is strict by default
+  # precisely so the gate in CI cannot lose its strictness by omission, which
+  # is what an ambient-CI switch would have allowed.
+  if ! CHECK_PNPM_BOOTSTRAP=1 PNPM_BOOTSTRAP_SOFT=1 python3 scripts/check-workflows.py; then
     echo >&2
     echo "pre-push: workflow checks failed — push aborted." >&2
     echo "pre-push: these break every caller, so fix before pushing." >&2
@@ -63,7 +72,51 @@ else
   fi
 fi
 
-# --- 3. workflow lint (actionlint + shellcheck) ----------------------------
+# --- 3. pnpm-version guard suite (python3) ---------------------------------
+# Same reasoning as the suite above, and the same "runs on every push" rule:
+# its extractor re-slices the block out of all three workflows and refuses
+# unless they are byte-identical, so it catches a copy drifting out of lockstep
+# no matter which file the push touched. No jq: the guard under test is pure
+# shell, though extract.sh slices it out with a python3 heredoc -- which is why
+# the probe below tests python3 and not jq.
+if [ ! -f tests/pnpm-guard/run.sh ]; then
+  : # suite absent on this ref -- nothing to run
+elif ! command -v python3 >/dev/null 2>&1; then
+  echo "pre-push: python3 not found -- skipping pnpm-version guard suite" >&2
+else
+  echo "pre-push: running the pnpm-version guard suite"
+  if ! bash tests/pnpm-guard/run.sh; then
+    echo >&2
+    echo "pre-push: pnpm-version guard suite failed -- push aborted." >&2
+    echo "pre-push: this guard is what keeps a caller off a pnpm the pinned" >&2
+    echo "pre-push: action does not bootstrap, and its warn branch exits 0 --" >&2
+    echo "pre-push: a mistake there is green until it reaches a shared store." >&2
+    failed=1
+  fi
+fi
+
+# --- 4. fixture cases for check-workflows.py itself ------------------------
+# Check 1 runs the script; this runs its assertions against fixtures. Both are
+# needed: check 1 proves the tree is clean, this proves the script would still
+# say so if it were not. A regex that quietly stops matching passes check 1.
+if [ ! -f tests/check-workflows/run.py ]; then
+  : # suite absent on this ref -- nothing to run
+elif ! command -v python3 >/dev/null 2>&1; then
+  echo "pre-push: python3 not found -- skipping workflow-check fixtures" >&2
+elif ! python3 -c 'import yaml' 2>/dev/null; then
+  echo "pre-push: PyYAML not installed -- skipping workflow-check fixtures" >&2
+else
+  echo "pre-push: running the workflow-check fixtures"
+  if ! python3 tests/check-workflows/run.py; then
+    echo >&2
+    echo "pre-push: workflow-check fixtures failed -- push aborted." >&2
+    echo "pre-push: these assertions gate every caller from the one required" >&2
+    echo "pre-push: check on main, so a false positive reds the whole repo." >&2
+    failed=1
+  fi
+fi
+
+# --- 5. workflow lint (actionlint + shellcheck) ----------------------------
 # Same gate CI runs in the `guard` job. Locally it uses whatever actionlint is
 # installed, while CI pins a version — so a skew surfaces as a CI-only finding.
 # Bump the local binary rather than suppressing it.

@@ -18,3 +18,10 @@ scratchpad/
 # The leading slash matters: it must not shadow tests/guard/guard.sh, which is a
 # real path the suite writes and reads.
 /guard.sh
+
+# Regenerated on every run: tests/check-workflows/run.py exec_module()s
+# scripts/check-workflows.py, so every pre-push and every `guard` job rewrites
+# this. Tracking it means a stale mirror of the source and a dirty tree for
+# everyone.
+__pycache__/
+*.py[cod]

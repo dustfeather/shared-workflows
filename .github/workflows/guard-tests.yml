@@ -41,6 +41,78 @@ jobs:
         # inside argv.
         run: bash tests/guard/all.sh
 
+      # The pnpm guard is a separate slice with its own extractor, so it gets
+      # its own step rather than joining all.sh: a failure here means the
+      # pnpm-version branch logic moved, which is a different diagnosis from a
+      # bump-token guard failure and should not arrive wearing its name.
+      #
+      # extract.sh also asserts the three shipped copies are byte-identical, so
+      # this step fails on drift between the workflows as well as on a broken
+      # branch. That matters because the guard runs in every caller and only
+      # one copy is exercised here.
+      - name: Extract the pnpm-version guard from the YAML and run its suite
+        run: bash tests/pnpm-guard/run.sh
+
+      # check-workflows.py runs in this same job below and is what makes its
+      # assertions binding fleet-wide. That is also why it needs cases of its
+      # own: a false positive in it reds the one required check on main and
+      # blocks the bot merge on every PR at once, and two of its regexes have
+      # already shipped broken here -- one double-escaped and matched nothing,
+      # one matched prose instead of `uses:` lines. A clean tree passing proves
+      # the happy path and nothing else.
+      #
+      # Offline: every case that reaches the network stubs fetch_json, and the
+      # ones that do not stub it never set CHECK_PNPM_BOOTSTRAP.
+      - name: Fixture cases for the workflow checks themselves
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          python3 tests/check-workflows/run.py
+
+      # The pnpm pin is a three-way agreement -- one `pnpm-version` default,
+      # one `pnpm/action-setup@<sha>`, and that SHA's bootstrap version -- and
+      # the fault it guards against passes its own PR: the first job writes the
+      # broken shared-store entry, a later one trips over it. So it cannot be
+      # caught by running anything, only by asserting it.
+      #
+      # CHECK_PNPM_BOOTSTRAP=1 makes the script read the action's committed
+      # bootstrap lockfiles at the pinned SHA, through the GitHub contents API.
+      # An unreachable lockfile is a hard failure here by DEFAULT -- nothing in
+      # this step has to ask for that -- because a Dependabot SHA bump is
+      # exactly the automated path that would otherwise move the bootstrap out
+      # from under the default with every static assertion still green. Only
+      # the pre-push hook opts out, by setting PNPM_BOOTSTRAP_SOFT=1, so an
+      # offline push is not blocked by a check that never disagreed.
+      #
+      # That direction is deliberate. This step used to get its strictness from
+      # ambient CI, which made the required check depend on a variable it never
+      # declared: tidy the env: block, or move this to a job that does not
+      # export it, and the gate silently becomes a green no-op. Now silence
+      # needs an affirmative opt-in, and check-workflows.py asserts this step
+      # does not take it.
+      #
+      # GITHUB_TOKEN below goes to api.github.com, NOT raw.githubusercontent.com
+      # — see fetch_json() for why that distinction is load-bearing rather than
+      # incidental. Three attempts with backoff, so one blip is not a wedged
+      # required check.
+      - name: Static checks over the workflows (incl. the pnpm pin)
+        env:
+          CHECK_PNPM_BOOTSTRAP: "1"
+          # No PNPM_BOOTSTRAP_SOFT here, on purpose: its absence is what makes
+          # an unreachable lockfile red. check-workflows.py fails if this step
+          # ever sets it, so the opt-out cannot be added back by a tidy-up.
+          #
+          # Raises the contents-API limit from 60 to 1000 requests/hour. It goes
+          # to api.github.com, NOT raw.githubusercontent.com -- see fetch_json()
+          # for the measured reason that distinction is load-bearing: raw
+          # answers 404, not 200, to an Authorization header it cannot validate,
+          # and github.token carries no grant on pnpm/action-setup.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          python3 scripts/check-workflows.py
+
       # actionlint parses every workflow and hands each `run:` block to
       # shellcheck. Pinned by version AND sha256: an unpinned download makes
       # the gate's verdict depend on whatever upstream published this morning,

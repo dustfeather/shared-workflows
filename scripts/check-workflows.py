@@ -23,6 +23,21 @@ Each check exists because it already shipped a break:
                         as a hard error, and the implicit default is far wider
                         than anything here needs.
 
+  pnpm-pin-drift        the `pnpm-version` default must be identical in every
+                        workflow that declares it, and every
+                        `pnpm/action-setup@` must be pinned to the SAME commit
+                        SHA. That version is safe only because it equals the
+                        BOOTSTRAP version the action installs at that SHA — the
+                        action never reads the runner image's pnpm. Move one
+                        without the other and pnpm's self-installer really runs,
+                        installs pnpm THROUGH pnpm into the shared store, and
+                        every job after the first dies with
+                        ERR_PNPM_BROKEN_PNPM_INSTALL. The FIRST run passes, so
+                        no PR can catch this; hence a static check.
+                        CHECK_PNPM_BOOTSTRAP=1 additionally verifies the default
+                        against the action's committed bootstrap lockfiles over
+                        the network.
+
   escalating-permission a called workflow may not request MORE token
                         permission than the calling job grants, and
                         `permissions:` takes no expressions — so a job asking
@@ -37,8 +52,11 @@ Exit 1 on any finding. Run from the repo root.
 
 import glob
 import json
+import os
 import re
 import sys
+import time
+import urllib.request
 
 import yaml
 
@@ -149,6 +167,319 @@ def check(path):
     return problems
 
 
+ACTION_SETUP_REF = re.compile(
+    r"^\s*(?:-\s*)?uses:\s*pnpm/action-setup@(\S+)", re.MULTILINE
+)
+SHA40 = re.compile(r"^[0-9a-f]{40}$")
+# Matches the invocation, not a mention. Anchored at the start of a line
+# (after optional env-var prefixes, which is how the pre-push hook calls it),
+# so `echo "python3 scripts/check-workflows.py"`, a comment naming the script
+# and a heredoc quoting it do not count as the gate running it. The looser
+# version of this matched the echo, which would have let a step that only
+# PRINTS the command satisfy the assertion.
+SCRIPT_INVOCATION = re.compile(
+    r"^[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*=\S*[ \t]+)*python3?[ \t]+\S*scripts/check-workflows\.py",
+    re.MULTILINE,
+)
+
+# The run-time guard step's copy of the bootstrap version. It exists because a
+# CALLER's `pnpm-version` is invisible to this script; this check exists so that
+# copy cannot drift away from the default it is meant to mirror.
+GUARD_LITERAL = re.compile(r'^\s*PNPM_BOOTSTRAP_VERSION:\s*"([^"]+)"', re.MULTILINE)
+
+# The GitHub contents API, retried and authenticated. This runs in `guard`,
+# the ONE required status check on main, and a hard failure there blocks even
+# pr-merge.yml's bot merge (github-actions[bot] is not an admin, so it cannot
+# bypass protection). Hard-on-CI is still right — "could not check" must not
+# read as "checked" — but it must not be one-shot: a rate-limit or a blip would
+# otherwise wedge the repo rather than raise a red advisory check.
+FETCH_ATTEMPTS = 3
+
+
+def fetch_json(url):
+    """GET url as JSON, retrying transient failures. Raises the last error."""
+    req = urllib.request.Request(url)
+    req.add_header("Accept", "application/vnd.github.raw+json")
+    req.add_header("X-GitHub-Api-Version", "2022-11-28")
+    # api.github.com, NOT raw.githubusercontent.com. raw does not fall back to
+    # anonymous on an Authorization header it cannot validate -- it answers 404
+    # (measured: valid token 200, malformed token 404, no header 200). Sending
+    # `github.token`, an installation token with no grant on pnpm/action-setup,
+    # therefore risked turning every guard run into a hard 404 on the one
+    # required check on main. The contents API is documented to take the token
+    # and is where it actually raises the limit, 60 -> 1000/hr unauthenticated
+    # to authenticated. Without a token it still answers, on the 60/hr tier.
+    token = os.environ.get("GITHUB_TOKEN")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    last = None
+    for attempt in range(FETCH_ATTEMPTS):
+        try:
+            with urllib.request.urlopen(req, timeout=20) as fh:
+                return json.loads(fh.read())
+        except Exception as exc:  # noqa: BLE001 — retry anything transient
+            last = exc
+            if attempt < FETCH_ATTEMPTS - 1:
+                time.sleep(2 ** attempt)
+    raise last
+
+
+BOOTSTRAP_LOCKS = {
+    "pnpm-lock.json": "node_modules/pnpm",
+    "exe-lock.json": "node_modules/@pnpm/exe",
+}
+
+
+def pnpm_pin_drift(files):
+    """Cross-file: the pnpm pin is a three-way agreement, not a per-file value.
+
+    `pnpm-version` is safe at exactly one value — the one pnpm/action-setup
+    BOOTSTRAPS. The action never consults the runner image: it wipes its dest
+    dir, `npm ci`s its own committed bootstrap lockfile, then runs
+    `pnpm self-update <the input>` unconditionally. Equal to the bootstrap that
+    is a no-op. Anything else really installs — through pnpm, so it honours the
+    container's shared `pnpm_config_store_dir` — and every job after the first
+    reuses a store entry missing @pnpm/exe.linux-x64 and dies.
+
+    A PR cannot catch it, because the FIRST run is the one that passes. So the
+    invariant is asserted statically instead: one default, one SHA.
+    """
+    problems = []
+    defaults = {}
+    refs_by_file = {}
+    text = {}
+
+    for path in files:
+        with open(path) as fh:
+            text[path] = fh.read()
+        try:
+            doc = load(path)
+        except yaml.YAMLError:
+            continue  # check() already reports the parse error
+        on = on_block(doc)
+        if isinstance(on, dict) and isinstance(on.get("workflow_call"), dict):
+            spec = (on["workflow_call"].get("inputs") or {}).get("pnpm-version")
+            if isinstance(spec, dict) and "default" in spec:
+                defaults[path] = str(spec["default"])
+
+        found = ACTION_SETUP_REF.findall(text[path])
+        if found:
+            refs_by_file[path] = found
+
+    for path, refs in sorted(refs_by_file.items()):
+        for ref in refs:
+            if not SHA40.match(ref):
+                problems.append(
+                    f"{path}: `pnpm/action-setup@{ref}` is a floating ref. Pin "
+                    f"the commit SHA — the action can otherwise bump its "
+                    f"bootstrap pnpm under us, and the break lands on the job "
+                    f"AFTER the one that proves it green."
+                )
+
+    # Both directions. A workflow that calls the action but ships no guard is
+    # the copy-paste case: it passes every other check here while leaving a
+    # CALLER free to pass "12", which is the hole the guard exists to close.
+    for path in sorted(refs_by_file):
+        if not GUARD_LITERAL.search(text[path]):
+            problems.append(
+                f"{path}: calls pnpm/action-setup but has no "
+                f"PNPM_BOOTSTRAP_VERSION guard step. A caller could pass any "
+                f"pnpm-version and nothing here would notice."
+            )
+
+    for path in files:
+        for literal in GUARD_LITERAL.findall(text[path]):
+            declared = defaults.get(path)
+            if declared is None:
+                problems.append(
+                    f"{path}: PNPM_BOOTSTRAP_VERSION is set here, but this "
+                    f"workflow declares no `pnpm-version` input for it to mirror."
+                )
+            elif literal != declared:
+                problems.append(
+                    f"{path}: the run-time guard checks {literal} while the "
+                    f"`pnpm-version` default is {declared}. They mirror the same "
+                    f"bootstrap version and must be equal."
+                )
+
+    # The gate that runs this script must not opt out of its own strictness.
+    # PNPM_BOOTSTRAP_SOFT turns an unreachable lockfile into a stderr note, so
+    # a step that sets it alongside CHECK_PNPM_BOOTSTRAP=1 reports success
+    # having verified nothing -- and does it on the one required check on main,
+    # where nothing downstream would notice. The pre-push hook is allowed to
+    # opt out; the workflow is not, and this is what makes "not declared" an
+    # enforced property rather than a comment asking nicely.
+    # Read the parsed env: maps, never the file text. A text scan matches the
+    # comment explaining WHY the variable is absent, so the check would fire on
+    # its own documentation -- and the obvious "fix" is to delete the comment,
+    # which is the opposite of what is wanted.
+    gate = "guard-tests.yml"
+    gate_path = next((p for p in files if p.endswith(gate)), None)
+    if gate_path is None:
+        problems.append(
+            f"{gate} is missing. It carries the `guard` job, which is the one "
+            f"required status check on main and the only place these "
+            f"assertions run in CI."
+        )
+    else:
+        try:
+            gate_doc = load(gate_path) or {}
+        except yaml.YAMLError:
+            gate_doc = {}
+
+        # Find the STEP that actually runs this script, and read ITS effective
+        # env. A union over every env: map in the file would assert only that
+        # the file somewhere sets the variable -- which is the same green no-op
+        # the ambient-CI switch was replaced to close. guard-tests.yml already
+        # has two python steps, so moving CHECK_PNPM_BOOTSTRAP onto the wrong
+        # one, or splitting this step in two, would leave the bootstrap
+        # lockfiles unread while the assertion still called the gate strict.
+        #
+        # Precedence is workflow -> job -> step, LAST wins, which is Actions'
+        # own order. The union got this backwards as well: it applied the
+        # workflow-level map after the step maps, so a top-level
+        # CHECK_PNPM_BOOTSTRAP: "0" would have overridden a correct per-step
+        # "1" and reddened the one required check for no reason.
+        gate_steps = []
+        for job in (gate_doc.get("jobs") or {}).values():
+            if not isinstance(job, dict):
+                continue
+            for step in job.get("steps") or []:
+                if not isinstance(step, dict):
+                    continue
+                if SCRIPT_INVOCATION.search(str(step.get("run") or "")):
+                    env = {}
+                    for scope in (
+                        gate_doc.get("env"),
+                        job.get("env"),
+                        step.get("env"),
+                    ):
+                        if isinstance(scope, dict):
+                            env.update(scope)
+                    gate_steps.append((step.get("name") or "<unnamed step>", env))
+
+        if not gate_steps:
+            problems.append(
+                f"{gate_path}: no step runs scripts/check-workflows.py. These "
+                f"assertions then gate nothing in CI, while the pre-push hook "
+                f"keeps passing locally and nothing says the difference."
+            )
+        for step_name, env in gate_steps:
+            if str(env.get("CHECK_PNPM_BOOTSTRAP", "")) != "1":
+                problems.append(
+                    f"{gate_path}: the step {step_name!r} runs "
+                    f"check-workflows.py without CHECK_PNPM_BOOTSTRAP=1 in its "
+                    f"effective env, so it never reads the bootstrap lockfiles "
+                    f"and the pin's third leg goes unverified while the step "
+                    f"still exits 0."
+                )
+            if "PNPM_BOOTSTRAP_SOFT" in env:
+                problems.append(
+                    f"{gate_path}: the step {step_name!r} sets "
+                    f"PNPM_BOOTSTRAP_SOFT, which downgrades an unreachable "
+                    f"bootstrap lockfile to a note. In the one required check "
+                    f"on main that turns 'could not verify the pin' into a "
+                    f"green run. Only the pre-push hook may opt out."
+                )
+
+    distinct_defaults = set(defaults.values())
+    if len(distinct_defaults) > 1:
+        problems.append(
+            "the `pnpm-version` defaults disagree: "
+            + ", ".join(f"{p} -> {v}" for p, v in sorted(defaults.items()))
+            + ". Every workflow declaring it must carry the same exact version."
+        )
+
+    pinned = sorted({r for refs in refs_by_file.values() for r in refs if SHA40.match(r)})
+    if len(pinned) > 1:
+        problems.append(
+            "pnpm/action-setup is pinned to more than one SHA: "
+            + ", ".join(pinned)
+            + ". One SHA means one bootstrap version; several cannot all match "
+            "a single default."
+        )
+
+    # The network half, which the pre-push hook and the guard job both enable.
+    # A version MISMATCH is always a hard finding. A network FAILURE is one too,
+    # BY DEFAULT: "could not check" must not read as "checked", since this is
+    # the ONLY assertion that catches the SHA moving to a commit with a
+    # different bootstrap -- the shape a Dependabot bump arrives in.
+    #
+    # PNPM_BOOTSTRAP_SOFT=1 downgrades that to a stderr note, so a push from a
+    # plane is not blocked by a check that never actually disagreed. The switch
+    # is deliberately an opt-IN to silence rather than an opt-in to strictness.
+    # It used to read ambient CI, which meant the strict behaviour depended on
+    # a variable no caller declared: tidying an env: block, or moving the step
+    # to a job that did not export it, would have turned the one required check
+    # on main into a green no-op with no annotation saying so. Now the silent
+    # state needs someone to ask for it by name, and the pre-push hook is the
+    # only caller that does.
+    if os.environ.get("CHECK_PNPM_BOOTSTRAP") == "1":
+        if len(pinned) != 1 or len(distinct_defaults) != 1:
+            problems.append(
+                "CHECK_PNPM_BOOTSTRAP=1 but the SHA or the default is not "
+                "single-valued; fix the findings above first."
+            )
+        else:
+            sha, want = pinned[0], next(iter(distinct_defaults))
+            for lock, key in BOOTSTRAP_LOCKS.items():
+                url = (
+                    "https://api.github.com/repos/pnpm/action-setup/contents/"
+                    f"src/install-pnpm/bootstrap/{lock}?ref={sha}"
+                )
+                try:
+                    data = fetch_json(url)
+                except Exception as exc:  # noqa: BLE001 — offline, rate-limited, DNS…
+                    msg = (
+                        f"could not read {lock} at {sha[:7]} ({exc}); "
+                        f"pnpm bootstrap left unverified"
+                    )
+                    if not os.environ.get("PNPM_BOOTSTRAP_SOFT"):
+                        # Hard here by design, which means an outage that
+                        # outlasts the retry budget -- notably a contents-API
+                        # rate limit, which resets hourly, not in the ~3s three
+                        # attempts cover -- reds the one required check and so
+                        # blocks the bot merge on EVERY pr in the repo, not just
+                        # this one. That is the cost of refusing to let "could
+                        # not check" read as "checked", and it is the right
+                        # trade, but a wedged repo must not also be a puzzle.
+                        # Name the way out in the failure itself.
+                        msg += (
+                            ". This is the one required check on main, so it "
+                            "blocks the bot merge repo-wide until it passes. "
+                            "If the cause is transient (rate limit: resets "
+                            "hourly), re-run the job. enforce_admins is false, "
+                            "so an owner can merge directly meanwhile."
+                        )
+                        problems.append(msg)
+                    else:
+                        print(f"  note: {msg}", file=sys.stderr)
+                    continue
+                got = ((data.get("packages") or {}).get(key) or {}).get("version")
+                # A missing key is not a version drift. It means the lockfile's
+                # shape changed under us -- `packages` restructured, the entry
+                # renamed -- and reporting that as "bootstraps None" sends the
+                # reader looking for a version move that never happened. Same
+                # class as the fetch failure above: could not read, not disagreed.
+                if got is None:
+                    msg = (
+                        f"could not read the bootstrap version from {lock} at "
+                        f"{sha[:7]}: no \"version\" under packages[{key!r}]"
+                    )
+                    if not os.environ.get("PNPM_BOOTSTRAP_SOFT"):
+                        problems.append(msg)
+                    else:
+                        print(f"  note: {msg}", file=sys.stderr)
+                elif got != want:
+                    problems.append(
+                        f"pnpm-version defaults to {want}, but "
+                        f"action-setup@{sha[:7]} bootstraps {got} in {lock}. "
+                        f"self-update would really run."
+                    )
+
+    return problems
+
+
 def main():
     files = sorted(glob.glob(".github/workflows/*.yml"))
     if not files:
@@ -160,6 +491,8 @@ def main():
             found.extend(check(path))
         except yaml.YAMLError as exc:
             found.append(f"{path}: YAML parse error: {exc}")
+
+    found.extend(pnpm_pin_drift(files))
 
     for problem in found:
         print(f"  {problem}")

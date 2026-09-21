@@ -8,7 +8,7 @@
 #   concurrency: { group: release, cancel-in-progress: true }
 #   jobs:
 #     release:
-#       uses: dustfeather/shared-workflows/.github/workflows/release-extension.yml@v6
+#       uses: dustfeather/shared-workflows/.github/workflows/release-extension.yml@v7
 #       with:
 #         runner: arc-df-<repo>
 #         targets: '["chrome","firefox"]'   # discord-purge adds "userscript"
@@ -49,10 +49,17 @@ on:
         default: "26"
       pnpm-version:
         description: |
-          pnpm major version. Forwarded to the nested node-test.yml call as
-          well, so `tests` and `build` always agree.
+          Exact pnpm version. Forwarded to the nested node-test.yml call as
+          well, so `tests` and `build` always agree. Effectively
+          single-valued on a runner pool that exports a shared pnpm store: any
+          value but the default is rejected before setup. Elsewhere it warns
+          and proceeds. See the comment below.
         type: string
-        default: "12"
+        # Must equal pnpm/action-setup's bootstrap version at the SHA pinned on the
+        # `uses:` line below (11.19.0), NOT the runner image's pnpm. Any other value
+        # runs pnpm's self-installer through the shared store and breaks every job
+        # after the first. Full rationale in node-test.yml; keep the three in sync.
+        default: "11.19.0"
 
 # Default for the whole file. `prepare` and `release` raise themselves to
 # `contents: write` for the version commit and the GitHub release; `build`,
@@ -85,9 +92,28 @@ jobs:
     # empty logs, every caller at once.
     #
     # The cost of waiting was one follow-up commit; the cost of being wrong
-    # was every caller. v6.0.0 is cut, so these three now point at it (#43) --
-    # which also stops them sitting on a frozen major.
-    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v6
+    # was every caller. So these three only ever point at a major that is
+    # ALREADY cut: v6.0.0 when that was current (#43), v7.0.0 now -- which also
+    # stops them sitting on a frozen major.
+    #
+    # Read that rule together with the bump a repointing commit takes, because
+    # the two are coupled. tag-release.yml re-points only the CURRENT major, so
+    # a commit that repoints these to @vN and also cuts vN+1 freezes @vN at the
+    # release before it -- and these three then resolve a copy of node-test.yml
+    # that predates whatever the commit was fixing, while the `build` job in
+    # this same file stays on its pinned SHA and stays green. Half the file
+    # fixed, half not, silently. Repointing to @vN is therefore only safe on a
+    # patch or minor of vN. If a change here ever has to be major, cut the
+    # major first and repoint these in the follow-up, never both at once.
+    #
+    # Moving them matters for this `tests` job specifically. `pnpm-version` is
+    # forwarded below, but the pnpm/action-setup SHA pin is NOT an input -- it
+    # lives inside node-test.yml. On frozen `@v6` that call resolved
+    # v6.2.4's node-test.yml, whose `uses: pnpm/action-setup@v6` is a floating
+    # tag: the forwarded 11.19.0 matched its bootstrap only by luck, and a
+    # bootstrap bump upstream would have broken `tests` while `build` in this
+    # same file stayed pinned and green.
+    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v7
     with:
       runner: ${{ inputs.runner }}
       # Forwarded so both jobs install the SAME pnpm. node-test.yml carries its
@@ -165,7 +191,49 @@ jobs:
           printf '//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n' >> "$HOME/.npmrc"
           echo "Wrote registry auth to ~/.npmrc (token read from env at use time)."
 
-      - uses: pnpm/action-setup@v6
+      # A caller can pass any string, and the static check in
+      # scripts/check-workflows.py cannot see it -- it only compares the defaults
+      # declared in this repo. "12" was the shipped default in v7.0.0, so a repo
+      # that pinned it explicitly while debugging those failures would keep the
+      # exact break the pin fixes, and the floating @v7 tag would look inert.
+      #
+      # Fail here, before the action runs, rather than at the ERR_PNPM_BROKEN_
+      # PNPM_INSTALL that lands on the SECOND job with nothing naming the cause.
+      # PNPM_BOOTSTRAP_VERSION must equal the pnpm-version default above;
+      # scripts/check-workflows.py asserts that it does.
+      - name: Reject a pnpm-version the pinned action does not bootstrap
+        env:
+          PNPM_BOOTSTRAP_VERSION: "11.19.0"
+          REQUESTED: ${{ inputs.pnpm-version }}
+        run: |
+          set -euo pipefail
+          # pnpm-guard-slice-begin -- tests/pnpm-guard/extract.sh re-extracts
+          # everything between these markers from all three workflows, asserts
+          # the three copies are byte-identical, and runs the result. Anchor on
+          # the markers, never on a line of the code under test: an edit that
+          # removes the anchor makes the extractor silently slice somewhere
+          # else, and the suite then reports ordinary-looking failures against
+          # code nobody is testing.
+          if [ "$REQUESTED" = "$PNPM_BOOTSTRAP_VERSION" ]; then
+            exit 0
+          fi
+          # The poisoning needs a store SHARED between jobs -- that is what makes
+          # one job's bad entry another job's crash. On the ARC pools that is
+          # pnpm_config_store_dir, exported at container level (k3s-cluster
+          # bootstrap/values-common.yaml). Without it -- runner: ubuntu-latest,
+          # or any pool not exporting it -- the self-installer writes to a
+          # per-job store and nothing breaks, so refusing there would be a hard
+          # failure with no underlying bug. Warn instead: the value is still
+          # wrong, it is just not fatal here.
+          if [ -z "${pnpm_config_store_dir:-}" ]; then
+            echo "::warning::pnpm-version is '$REQUESTED' rather than the pinned action's bootstrap $PNPM_BOOTSTRAP_VERSION, so pnpm/action-setup will run 'pnpm self-update'. Harmless on this runner because no shared pnpm store is exported, but it breaks every job after the first on a pool that exports pnpm_config_store_dir. Drop the input to take the default."
+            exit 0
+          fi
+          echo "::error::pnpm-version is '$REQUESTED', but pnpm/action-setup at the SHA pinned in this workflow bootstraps $PNPM_BOOTSTRAP_VERSION. Any other value makes the action run 'pnpm self-update', which installs pnpm THROUGH pnpm into the shared pnpm_config_store_dir. The first job succeeds and every later one dies with ERR_PNPM_BROKEN_PNPM_INSTALL. Remove the pnpm-version input to take the default."
+          exit 1
+          # pnpm-guard-slice-end
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         env:
           # The action's self-installer shells out to `npm install` against
           # registry.npmjs.org, so npm_config_* applies. `audit` is the
@@ -236,7 +304,7 @@ jobs:
   publish-chrome:
     needs: [prepare, build]
     if: contains(fromJSON(inputs.targets), 'chrome')
-    uses: dustfeather/shared-workflows/.github/workflows/publish-chrome.yml@v6
+    uses: dustfeather/shared-workflows/.github/workflows/publish-chrome.yml@v7
     with:
       runner: ${{ inputs.runner }}
       artifact-name: extensions-chrome
@@ -246,7 +314,7 @@ jobs:
   publish-firefox:
     needs: [prepare, build]
     if: contains(fromJSON(inputs.targets), 'firefox')
-    uses: dustfeather/shared-workflows/.github/workflows/publish-firefox.yml@v6
+    uses: dustfeather/shared-workflows/.github/workflows/publish-firefox.yml@v7
     with:
       runner: ${{ inputs.runner }}
       artifact-name: extensions-firefox
