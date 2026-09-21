@@ -49,7 +49,7 @@ on:
         default: "26"
       pnpm-version:
         description: |
-          pnpm major version. Forwarded to the nested node-test.yml call as
+          Exact pnpm version. Forwarded to the nested node-test.yml call as
           well, so `tests` and `build` always agree.
         type: string
         # Must match the pnpm the ARC runner image ships (v11.19.0). Asking for
