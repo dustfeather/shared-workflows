@@ -80,11 +80,13 @@ on:
         default: ""
       runner:
         description: |
-          Runner label for this job. Defaults to `ubuntu-latest` (GitHub-hosted),
-          which is where the whole fleet runs since v8. Pass a self-hosted ARC
-          scale-set label (e.g. `arc-df-uninsta`) only for a job that genuinely
-          needs the cluster; those pools are now kept alive only for
-          deploy-k8s.yml and deploy-helm.yml.
+          Runner label for this job. Defaults to `ubuntu-latest` (GitHub-hosted);
+          since v8 that is the default for every `runner` input here, where it
+          used to be an `arc-*` scale set. Pass a self-hosted scale-set label
+          (e.g. `arc-df-uninsta`) only for a job that genuinely needs the
+          cluster — `deploy-k8s.yml` and `deploy-helm.yml` are the two that
+          always will. A default is not a migration: a caller that passes a
+          label keeps its pool, this repo's own shims included.
         type: string
         default: "ubuntu-latest"
 

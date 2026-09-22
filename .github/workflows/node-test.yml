@@ -199,11 +199,13 @@ on:
         default: high
       runner:
         description: |
-          Runner label for this job. Defaults to `ubuntu-latest` (GitHub-hosted),
-          which is where the whole fleet runs since v8. Pass a self-hosted ARC
-          scale-set label (e.g. `arc-df-uninsta`) only for a job that genuinely
-          needs the cluster; those pools are now kept alive only for
-          deploy-k8s.yml and deploy-helm.yml.
+          Runner label for this job. Defaults to `ubuntu-latest` (GitHub-hosted);
+          since v8 that is the default for every `runner` input here, where it
+          used to be an `arc-*` scale set. Pass a self-hosted scale-set label
+          (e.g. `arc-df-uninsta`) only for a job that genuinely needs the
+          cluster — `deploy-k8s.yml` and `deploy-helm.yml` are the two that
+          always will. A default is not a migration: a caller that passes a
+          label keeps its pool, this repo's own shims included.
         type: string
         default: "ubuntu-latest"
     secrets:
@@ -363,18 +365,18 @@ jobs:
       # /home/runner/work/<repo>/<repo>` rather than skipping the cache, so
       # every caller with its lockfile under `working-dir` and none at the
       # root would fail the step outright on v8 having been green on v7.
-          # Two globs, newline-separated, because a single one is wrong for
-          # half the input space either way. setup-node hashes whatever the
-          # list resolves to and only fails when NOTHING resolves, so the pair
-          # covers the self-contained subdirectory (lockfile beside the
-          # package.json) and the workspace (one lockfile at the repo root,
-          # `working-dir` pointing at a member) without the caller choosing.
-          # With just the subdirectory glob a pnpm workspace fails
-          # `Some specified paths were not resolved, unable to cache
-          # dependencies`; with just the root glob the subdirectory shape fails
-          # `Dependencies lock file is not found`. Both are hard step failures,
-          # not cache misses. A repo with no lockfile anywhere is not a new
-          # break — every install branch below already requires one.
+      #
+      # Two globs, newline-separated, because a single one is wrong for half
+      # the input space either way. setup-node hashes whatever the list
+      # resolves to and only fails when NOTHING resolves, so the pair covers
+      # the self-contained subdirectory (lockfile beside the package.json) and
+      # the workspace (one lockfile at the repo root, `working-dir` pointing at
+      # a member) without the caller choosing. With just the subdirectory glob
+      # a pnpm workspace fails `Some specified paths were not resolved, unable
+      # to cache dependencies`; with just the root glob the subdirectory shape
+      # fails `Dependencies lock file is not found`. Both are hard step
+      # failures, not cache misses. A repo with no lockfile anywhere is not a
+      # new break — every install branch below already requires one.
       - if: steps.pm.outputs.pm != 'bun'
         uses: actions/setup-node@v7
         with:

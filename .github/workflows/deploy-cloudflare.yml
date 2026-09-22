@@ -215,13 +215,46 @@ on:
           Set it only when that resolution fails.
         type: string
         default: ""
+      package-manager-cache:
+        description: |
+          Restore/save the package manager's download cache via
+          `actions/setup-node` (`cache: npm|yarn|pnpm`). ON by default since
+          v8, matching node-test.yml and for the same reason: `runner` now
+          defaults to `ubuntu-latest`, which starts from an empty store every
+          job.
+
+          Exists so this workflow is no less recoverable than node-test.yml.
+          With `cache` set, setup-node FAILS THE STEP rather than skipping
+          when the lookup resolves nothing, and a deploy is the worst path to
+          learn that on. Turn it OFF for a lockfile layout the derived globs
+          do not reach, or for a caller still pinned to an ARC pool, whose
+          persistent node-local store makes the restore pure overhead.
+          `install-dir` is NOT the escape hatch — it also moves where the
+          install runs. No effect when the package manager is bun (setup-node
+          has no bun cache mode).
+        type: boolean
+        default: true
+      cache-dependency-path:
+        description: |
+          Overrides the glob list `actions/setup-node` hashes for the cache
+          key. Newline-separated; paths resolve from the repo root, not from
+          `install-dir`. Empty (the default) derives a list covering the
+          lockfile beside the Worker and the lockfile at the repo root. Reach
+          for this when it lives at neither — a nested workspace whose
+          lockfile sits one level above the Worker, say. Ignored when
+          `package-manager-cache` is false, and when the package manager is
+          bun.
+        type: string
+        default: ""
       runner:
         description: |
-          Runner label for this job. Defaults to `ubuntu-latest` (GitHub-hosted),
-          which is where the whole fleet runs since v8. Pass a self-hosted ARC
-          scale-set label (e.g. `arc-df-uninsta`) only for a job that genuinely
-          needs the cluster; those pools are now kept alive only for
-          deploy-k8s.yml and deploy-helm.yml.
+          Runner label for this job. Defaults to `ubuntu-latest` (GitHub-hosted);
+          since v8 that is the default for every `runner` input here, where it
+          used to be an `arc-*` scale set. Pass a self-hosted scale-set label
+          (e.g. `arc-df-uninsta`) only for a job that genuinely needs the
+          cluster — `deploy-k8s.yml` and `deploy-helm.yml` are the two that
+          always will. A default is not a migration: a caller that passes a
+          label keeps its pool, this repo's own shims included.
         type: string
         default: "ubuntu-latest"
     secrets:
@@ -349,19 +382,26 @@ jobs:
           echo "install=${INSTALL_DIR:-$WORKING_DIR}" >> "$GITHUB_OUTPUT"
 
       # See node-test.yml's equivalent step for why this is a step and not an
-      # inline expression. `install-dir` is an escape hatch for the lockfile
-      # location only in the sense that it also moves where the install RUNS,
-      # which is a behaviour change to buy a cache fix — hence the same
-      # two-glob default here rather than pointing callers at it.
+      # inline expression. `install-dir` is not the escape hatch for a lockfile
+      # the globs miss: it also moves where the install RUNS, which is a
+      # behaviour change bought to fix a cache key. `cache-dependency-path`
+      # and `package-manager-cache` are the escape hatches, mirroring
+      # node-test.yml — a deploy is the last path that should be the one with
+      # no way out.
       - name: Derive the lockfile globs for the cache key
         id: cachedeps
         env:
           INSTALL: ${{ steps.dirs.outputs.install }}
+          OVERRIDE: ${{ inputs.cache-dependency-path }}
         run: |
           set -eu
           {
             echo "globs<<CACHEDEPS_EOF"
-            printf '%s/*lock*\n*lock*\n' "$INSTALL"
+            if [ -n "$OVERRIDE" ]; then
+              printf '%s\n' "$OVERRIDE"
+            else
+              printf '%s/*lock*\n*lock*\n' "$INSTALL"
+            fi
             echo "CACHEDEPS_EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -459,7 +499,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
-          cache: ${{ steps.pm.outputs.pm != 'bun' && steps.pm.outputs.pm || '' }}
+          cache: ${{ inputs.package-manager-cache && steps.pm.outputs.pm != 'bun' && steps.pm.outputs.pm || '' }}
           # Mandatory alongside `cache`, not an optimisation. Unset, setup-node
           # looks for the lockfile in GITHUB_WORKSPACE only and THROWS
           # `Dependencies lock file is not found` rather than skipping — so a

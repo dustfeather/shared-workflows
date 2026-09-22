@@ -26,11 +26,13 @@ on:
         default: false
       runner:
         description: |
-          Runner label for this job. Defaults to `ubuntu-latest` (GitHub-hosted),
-          which is where the whole fleet runs since v8. Pass a self-hosted ARC
-          scale-set label (e.g. `arc-df-uninsta`) only for a job that genuinely
-          needs the cluster; those pools are now kept alive only for
-          deploy-k8s.yml and deploy-helm.yml.
+          Runner label for this job. Defaults to `ubuntu-latest` (GitHub-hosted);
+          since v8 that is the default for every `runner` input here, where it
+          used to be an `arc-*` scale set. Pass a self-hosted scale-set label
+          (e.g. `arc-df-uninsta`) only for a job that genuinely needs the
+          cluster — `deploy-k8s.yml` and `deploy-helm.yml` are the two that
+          always will. A default is not a migration: a caller that passes a
+          label keeps its pool, this repo's own shims included.
         type: string
         default: "ubuntu-latest"
     secrets:
@@ -101,8 +103,15 @@ jobs:
       # failure that has no fallback.
       #
       # CRG_VERSION is a SECOND COPY of the ARG in runner-image/Dockerfile.
-      # Bump both together — nothing errors when they drift, the two runner
-      # types just build the graph with different parsers.
+      # Bump both together. Nothing at RUNTIME errors when they drift — the
+      # two runner types just build the graph with different parsers, and the
+      # symptom is "the review got worse on one runner type", which nobody
+      # traces back to a version literal. So the agreement is asserted
+      # statically instead: scripts/check-workflows.py's
+      # runner_image_pin_drift() fails when this value and `ARG CRG_VERSION`
+      # disagree, or when the ARG is gone, and that script is a step of the
+      # `guard` job — the one required status check on main. Same treatment
+      # the pnpm three-way agreement gets, for the same reason.
       - name: Ensure code-review-graph is installed
         if: steps.codeql_gate.outputs.skip != 'true'
         continue-on-error: true

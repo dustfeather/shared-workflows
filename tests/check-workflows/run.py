@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Fixture cases for pnpm_pin_drift() in scripts/check-workflows.py.
+"""Fixture cases for the cross-file checks in scripts/check-workflows.py.
+
+Two of them: pnpm_pin_drift() and runner_image_pin_drift(). Both compare a
+literal in a workflow against a second copy of the same value living in another
+file, both are silent when they drift, and both ride the same required check.
 
 Why this exists: that function rides on the `guard` job, which is the one
 required status check on `main`, so a false positive in it reds every PR in
@@ -350,6 +354,78 @@ case("no step actually runs the script",
 case("a mention is not an invocation, so no env finding",
      {"guard-tests.yml": gate(runs=False), "node-test.yml": workflow()},
      "!effective env")
+
+
+# --- runner_image_pin_drift() --------------------------------------------
+# Separate harness because this check takes a second file that is NOT a
+# workflow, and because a missing one is a legitimate no-finding rather than
+# an error -- the distinction the cases below exist to pin down.
+def image_case(name, workflows, dockerfile, expect):
+    """dockerfile: the ARG file's contents, or None to leave it absent."""
+    global passed, failed
+    with tempfile.TemporaryDirectory() as d:
+        paths = []
+        for fname, body in workflows.items():
+            p = pathlib.Path(d) / fname
+            p.write_text(body)
+            paths.append(str(p))
+        docker = str(pathlib.Path(d) / "Dockerfile")
+        if dockerfile is not None:
+            pathlib.Path(docker).write_text(dockerfile)
+        problems = cw.runner_image_pin_drift(sorted(paths), dockerfile=docker)
+    joined = " | ".join(problems)
+    ok = (not problems) if expect is None else (expect in joined)
+    if ok:
+        print(f"PASS  {name}")
+        passed += 1
+    else:
+        print(f"FAIL  {name}\n      expected: {expect!r}\n      got: {joined or '(no findings)'}")
+        failed += 1
+
+
+def crg_workflow(literal='"2.3.5"', prose=None):
+    out = ["jobs:", "  review:", "    runs-on: ubuntu-latest", "    steps:"]
+    if literal is not None:
+        out += [
+            "      - name: Ensure code-review-graph is installed",
+            "        env:",
+            f"          CRG_VERSION: {literal}",
+            "        run: pip install code-review-graph",
+        ]
+    if prose is not None:
+        out += ["      - name: review", "        with:", f"          prompt: {prose}"]
+    return "\n".join(out) + "\n"
+
+
+image_case("agreeing pins: no findings",
+           {"a.yml": crg_workflow()}, "ARG CRG_VERSION=2.3.5\n", None)
+image_case("drifted pins",
+           {"a.yml": crg_workflow(literal='"2.4.0"')}, "ARG CRG_VERSION=2.3.5\n",
+           "pins CRG_VERSION=2.4.0")
+# A checkout without the image -- a fixture tree, or a consumer vendoring only
+# the workflows -- has nothing to disagree with, so it must stay quiet. Getting
+# this wrong reds the one required check for everyone who does not build the
+# image.
+image_case("absent Dockerfile is not a finding",
+           {"a.yml": crg_workflow()}, None, None)
+# The other direction: the image stopped installing it, so the workflow's
+# "second copy" comment is now a lie and the pin tracks nothing.
+image_case("Dockerfile present but the ARG is gone",
+           {"a.yml": crg_workflow()}, "ARG OTHER=1\n",
+           "declares no ARG CRG_VERSION")
+image_case("no literal in any workflow: nothing to compare",
+           {"a.yml": crg_workflow(literal=None)}, "ARG CRG_VERSION=2.3.5\n", None)
+# The anchor is the env KEY, not the version string. This workflow ships a
+# prompt quoting an unrelated 2.4.0; reading that as the pin would fail the
+# required check over prose, which is the shape that has already shipped twice
+# in this file's sibling regexes.
+image_case("a version in prose is not the pin",
+           {"a.yml": crg_workflow(prose="please use 2.4.0 of something else")},
+           "ARG CRG_VERSION=2.3.5\n", None)
+image_case("a quoted ARG value still agrees",
+           {"a.yml": crg_workflow()}, 'ARG CRG_VERSION="2.3.5"\n', None)
+image_case("an unquoted workflow literal still matches",
+           {"a.yml": crg_workflow(literal="2.3.5")}, "ARG CRG_VERSION=2.3.5\n", None)
 
 print(f"\ncheck-workflows: {passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
