@@ -99,7 +99,11 @@ Consequences a change here is most likely to get wrong:
 
 - **Since 2026-09-22 the review job is gated to Dependabot**, here and in all 19
   other caller repos: `if: ... && github.event.pull_request.user.login ==
-  'dependabot[bot]'`. Human- and agent-authored PRs are reviewed locally against
+  'dependabot[bot]'`. One of those 19, `dustfeather/filelist-seed-purge`, was
+  deleted later the same day, so a live enumeration returns 19 callers in total
+  rather than 20 — every count in this file records what the sweep touched, not
+  what exists today, and the live refs are what a new sweep must read.
+  Human- and agent-authored PRs are reviewed locally against
   the working diff before the push, which is where a finding is still free to
   act on. The Dependabot track stays in CI because nobody is at a terminal when
   Dependabot opens a PR, and because that review is what ends on an approve —
