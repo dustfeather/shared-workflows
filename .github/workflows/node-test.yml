@@ -313,11 +313,24 @@ jobs:
       # bun. An empty `cache` value disables caching, so when
       # package-manager-cache is false we pass '' and setup-node does no
       # restore/save.
+      #
+      # `cache-dependency-path` is not an optimisation here, it is what stops
+      # the cache default from being a hard break. With `cache` set and this
+      # unset, setup-node looks for the lockfile in GITHUB_WORKSPACE ONLY — no
+      # recursive search — and THROWS `Dependencies lock file is not found in
+      # /home/runner/work/<repo>/<repo>` rather than skipping the cache. Every
+      # caller passing `working-dir` with its lockfile in that subdirectory and
+      # none at the root ran green on v7 (where `cache` was '') and would fail
+      # the step outright on v8. It follows `working-dir` so the lookup lands
+      # in the same directory the install does. The glob covers all three
+      # lockfile names, since `steps.pm` detects the manager from whichever is
+      # present.
       - if: steps.pm.outputs.pm != 'bun'
         uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
           cache: ${{ inputs.package-manager-cache && steps.pm.outputs.pm || '' }}
+          cache-dependency-path: ${{ inputs.working-dir }}/*lock*
       - if: steps.pm.outputs.pm == 'bun'
         uses: actions/setup-node@v7
         with:

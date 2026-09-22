@@ -85,21 +85,24 @@ jobs:
         with:
           fetch-depth: 1
 
-      # Both of the next two steps exist because this workflow used to get
-      # its dependencies from the pre-baked `actions-runner-claude` image and
-      # name none of them. Anything installed by runner-image/Dockerfile is on
-      # PATH for every job on an ARC pool without appearing in the workflow, so
-      # the file READ as self-contained while it was not. Moving the default to
-      # `ubuntu-latest` in v8 replaces that whole surface at once, and both of
-      # these failures are quiet: the graph tool is `continue-on-error`, and a
-      # missing plugin makes the agent's subagent dispatch fall back rather
-      # than error. Declare them here; the `command -v` guard keeps the ARC
-      # pools on the same code path instead of forking into two.
+      # This step exists because the workflow used to get code-review-graph
+      # from the pre-baked `actions-runner-claude` image and name it nowhere.
+      # Anything installed by runner-image/Dockerfile is on PATH for every job
+      # on an ARC pool without appearing in the workflow, so the file READ as
+      # self-contained while it was not, and moving the default to
+      # `ubuntu-latest` in v8 replaces that whole surface at once. The
+      # `command -v` guard keeps the ARC pools on the same code path instead
+      # of forking into two.
       #
-      # Each version below is a SECOND COPY of a value in
-      # runner-image/Dockerfile (CRG_VERSION). Bump both together — nothing
-      # errors when they drift, the two runner types just build the graph with
-      # different parsers.
+      # `continue-on-error` is deliberate HERE and only here: the agent prompt
+      # carries an explicit `gh pr diff` fallback, so a review without the
+      # graph is degraded rather than wrong, and blocking every review on a
+      # PyPI hiccup would be the worse trade. It is not a licence to bury a
+      # failure that has no fallback.
+      #
+      # CRG_VERSION is a SECOND COPY of the ARG in runner-image/Dockerfile.
+      # Bump both together — nothing errors when they drift, the two runner
+      # types just build the graph with different parsers.
       - name: Ensure code-review-graph is installed
         if: steps.codeql_gate.outputs.skip != 'true'
         continue-on-error: true
@@ -114,40 +117,6 @@ jobs:
           python3 -m pip install --no-cache-dir --break-system-packages \
             "code-review-graph==${CRG_VERSION}"
           code-review-graph --version
-
-      # The standard review track dispatches pr-review-toolkit's specialist
-      # subagents. Baked into the ARC image's ~/.claude; absent on a hosted
-      # runner, where $HOME/.claude does not exist at all. Three constraints,
-      # carried over from runner-image/Dockerfile where they were each
-      # verified: the marketplace source must be the full https:// URL (the
-      # `owner/repo` shorthand resolves to git@github.com: and the clone dies
-      # on any host without an SSH key — which is every CI runner); `install`
-      # needs `-y` because without a TTY it refuses the marketplace-declared
-      # -command confirmation; and declaring the plugin in settings.json
-      # installs nothing, Claude Code reads those keys and performs no fetch.
-      - name: Ensure pr-review-toolkit plugin is installed
-        if: steps.codeql_gate.outputs.skip != 'true'
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          # Install the CLI if it is not already on PATH. This is NOT the copy
-          # the action runs — the action installs its own — but plugin state is
-          # per-$HOME, not per-binary: the install writes ~/.claude/plugins plus
-          # the `enabledPlugins` / `extraKnownMarketplaces` keys in
-          # ~/.claude/settings.json, and the action's copy reads the same $HOME.
-          # Guarding on `command -v claude` and bailing would make this step a
-          # no-op on every hosted runner, since nothing puts claude on PATH
-          # before the action runs — a check that silently never does its job.
-          if ! command -v claude >/dev/null 2>&1; then
-            npm install -g @anthropic-ai/claude-code
-          fi
-          if claude plugin list 2>/dev/null | grep -q 'pr-review-toolkit@claude-plugins-official'; then
-            echo "pr-review-toolkit already installed."
-            exit 0
-          fi
-          claude plugin marketplace add https://github.com/anthropics/claude-plugins-official
-          claude plugin install pr-review-toolkit@claude-plugins-official -y
-          claude plugin list | grep -q 'pr-review-toolkit@claude-plugins-official'
 
       - name: Build code review graph
         # Parses the checkout into code-review-graph's structural graph so the

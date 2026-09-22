@@ -443,6 +443,17 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
           cache: ${{ steps.pm.outputs.pm != 'bun' && steps.pm.outputs.pm || '' }}
+          # Mandatory alongside `cache`, not an optimisation. Unset, setup-node
+          # looks for the lockfile in GITHUB_WORKSPACE only and THROWS
+          # `Dependencies lock file is not found` rather than skipping — so a
+          # Worker at `workers/api` holding its own lockfile, with none at the
+          # root, would fail its deploy on v8 having changed nothing. It
+          # follows `steps.dirs.outputs.install` (install-dir, falling back to
+          # working-dir) so the lookup lands where the install runs. The
+          # monorepo shape the install-dir description calls out survives
+          # either way, because there the lockfile IS at the root — which is
+          # exactly what would have made this pass a smoke test.
+          cache-dependency-path: ${{ steps.dirs.outputs.install }}/*lock*
 
       - name: Install dependencies
         working-directory: ${{ steps.dirs.outputs.install }}

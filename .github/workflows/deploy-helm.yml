@@ -97,7 +97,7 @@ on:
           GitHub-hosted runner can never reach — and because the credential is
           the runner pod's own mounted ServiceAccount token, which exists only
           inside the cluster. The ARC scale sets stay deployed for this
-          workflow and deploy-helm.yml, and for nothing else.
+          workflow and deploy-k8s.yml, and for nothing else.
         type: string
         default: "arc-df-shared-workflows"
 
