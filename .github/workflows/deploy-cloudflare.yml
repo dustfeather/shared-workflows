@@ -348,6 +348,23 @@ jobs:
           set -eu
           echo "install=${INSTALL_DIR:-$WORKING_DIR}" >> "$GITHUB_OUTPUT"
 
+      # See node-test.yml's equivalent step for why this is a step and not an
+      # inline expression. `install-dir` is an escape hatch for the lockfile
+      # location only in the sense that it also moves where the install RUNS,
+      # which is a behaviour change to buy a cache fix — hence the same
+      # two-glob default here rather than pointing callers at it.
+      - name: Derive the lockfile globs for the cache key
+        id: cachedeps
+        env:
+          INSTALL: ${{ steps.dirs.outputs.install }}
+        run: |
+          set -eu
+          {
+            echo "globs<<CACHEDEPS_EOF"
+            printf '%s/*lock*\n*lock*\n' "$INSTALL"
+            echo "CACHEDEPS_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Detect package manager
         id: pm
         working-directory: ${{ steps.dirs.outputs.install }}
@@ -447,13 +464,20 @@ jobs:
           # looks for the lockfile in GITHUB_WORKSPACE only and THROWS
           # `Dependencies lock file is not found` rather than skipping — so a
           # Worker at `workers/api` holding its own lockfile, with none at the
-          # root, would fail its deploy on v8 having changed nothing. It
-          # follows `steps.dirs.outputs.install` (install-dir, falling back to
-          # working-dir) so the lookup lands where the install runs. The
-          # monorepo shape the install-dir description calls out survives
-          # either way, because there the lockfile IS at the root — which is
-          # exactly what would have made this pass a smoke test.
-          cache-dependency-path: ${{ steps.dirs.outputs.install }}/*lock*
+          # root, would fail its deploy on v8 having changed nothing.
+          # Two globs, newline-separated, because a single one is wrong for
+          # half the input space either way. setup-node hashes whatever the
+          # list resolves to and only fails when NOTHING resolves, so the pair
+          # covers the self-contained subdirectory (lockfile beside the
+          # package.json) and the workspace (one lockfile at the repo root,
+          # `working-dir` pointing at a member) without the caller choosing.
+          # With just the subdirectory glob a pnpm workspace fails
+          # `Some specified paths were not resolved, unable to cache
+          # dependencies`; with just the root glob the subdirectory shape fails
+          # `Dependencies lock file is not found`. Both are hard step failures,
+          # not cache misses. A repo with no lockfile anywhere is not a new
+          # break — every install branch below already requires one.
+          cache-dependency-path: ${{ steps.cachedeps.outputs.globs }}
 
       - name: Install dependencies
         working-directory: ${{ steps.dirs.outputs.install }}

@@ -86,14 +86,32 @@ on:
           that store through the throttled in-cluster GitHub Actions cache
           service (~40s/job) for nothing. Turn it back OFF for a caller still
           pinned to such a pool — the two defaults are opposite for opposite
-          reasons, not one of them wrong. No effect when the package manager is
-          bun (setup-node has no bun cache mode).
+          reasons, not one of them wrong.
+
+          It is also the off switch when the cache lookup cannot find a
+          lockfile: with `cache` set, setup-node FAILS THE STEP rather than
+          skipping the cache. The derived glob list covers the lockfile beside
+          the package.json and the lockfile at the repo root; a layout neither
+          finds needs `cache-dependency-path`, or this set to false. No effect
+          when the package manager is bun (setup-node has no bun cache mode).
         type: boolean
         default: true
       working-dir:
         description: Directory containing package.json
         type: string
         default: "."
+      cache-dependency-path:
+        description: |
+          Overrides the glob list `actions/setup-node` hashes for the cache
+          key. Newline-separated; paths resolve from the repo root, not from
+          `working-dir`. Empty (the default) derives a list covering both the
+          lockfile-beside-package.json and the lockfile-at-the-root shapes,
+          which is what nearly every caller wants — reach for this only when
+          the lockfile is somewhere neither glob finds. Ignored when
+          `package-manager-cache` is false, and when the package manager is
+          bun (setup-node has no bun cache mode).
+        type: string
+        default: ""
       script-setup:
         description: |
           package.json script run after install and before every gate —
@@ -245,6 +263,30 @@ jobs:
           else                              echo "pm=npm"  >> "$GITHUB_OUTPUT"
           fi
 
+      # Built in a step rather than inline in `with:` because the value is
+      # multi-line, and a ${{ }} expression cannot produce a newline: the
+      # obvious `format('{0}/*lock*{1}*lock*', ..., '\n')` emits a literal
+      # backslash-n. Runs at the job's default working-directory, so the
+      # globs are written from `working-dir` as a VALUE — setup-node resolves
+      # them against GITHUB_WORKSPACE, not against the step's cwd.
+      - name: Derive the lockfile globs for the cache key
+        id: cachedeps
+        env:
+          OVERRIDE: ${{ inputs.cache-dependency-path }}
+          WORKING_DIR: ${{ inputs.working-dir }}
+        working-directory: .
+        run: |
+          set -eu
+          {
+            echo "globs<<CACHEDEPS_EOF"
+            if [ -n "$OVERRIDE" ]; then
+              printf '%s\n' "$OVERRIDE"
+            else
+              printf '%s/*lock*\n*lock*\n' "$WORKING_DIR"
+            fi
+            echo "CACHEDEPS_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       # A caller can pass any string, and the static check in
       # scripts/check-workflows.py cannot see it -- it only compares the defaults
       # declared in this repo. "12" was the shipped default in v7.0.0, so a repo
@@ -318,19 +360,27 @@ jobs:
       # the cache default from being a hard break. With `cache` set and this
       # unset, setup-node looks for the lockfile in GITHUB_WORKSPACE ONLY — no
       # recursive search — and THROWS `Dependencies lock file is not found in
-      # /home/runner/work/<repo>/<repo>` rather than skipping the cache. Every
-      # caller passing `working-dir` with its lockfile in that subdirectory and
-      # none at the root ran green on v7 (where `cache` was '') and would fail
-      # the step outright on v8. It follows `working-dir` so the lookup lands
-      # in the same directory the install does. The glob covers all three
-      # lockfile names, since `steps.pm` detects the manager from whichever is
-      # present.
+      # /home/runner/work/<repo>/<repo>` rather than skipping the cache, so
+      # every caller with its lockfile under `working-dir` and none at the
+      # root would fail the step outright on v8 having been green on v7.
+          # Two globs, newline-separated, because a single one is wrong for
+          # half the input space either way. setup-node hashes whatever the
+          # list resolves to and only fails when NOTHING resolves, so the pair
+          # covers the self-contained subdirectory (lockfile beside the
+          # package.json) and the workspace (one lockfile at the repo root,
+          # `working-dir` pointing at a member) without the caller choosing.
+          # With just the subdirectory glob a pnpm workspace fails
+          # `Some specified paths were not resolved, unable to cache
+          # dependencies`; with just the root glob the subdirectory shape fails
+          # `Dependencies lock file is not found`. Both are hard step failures,
+          # not cache misses. A repo with no lockfile anywhere is not a new
+          # break — every install branch below already requires one.
       - if: steps.pm.outputs.pm != 'bun'
         uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
           cache: ${{ inputs.package-manager-cache && steps.pm.outputs.pm || '' }}
-          cache-dependency-path: ${{ inputs.working-dir }}/*lock*
+          cache-dependency-path: ${{ steps.cachedeps.outputs.globs }}
       - if: steps.pm.outputs.pm == 'bun'
         uses: actions/setup-node@v7
         with:
