@@ -53,6 +53,17 @@ jobs:
       - name: Extract the pnpm-version guard from the YAML and run its suite
         run: bash tests/pnpm-guard/run.sh
 
+      # Its own step for the same reason the pnpm guard has one: a failure here
+      # means the cache-glob logic moved, not that a bump-token assertion
+      # broke. The block writes setup-node's `cache-dependency-path`, which
+      # FAILS THE STEP rather than skipping when nothing resolves, so it is the
+      # one piece of this PR that cannot be proven by reading. extract.sh
+      # derives the set of copies from the markers and cross-checks it against
+      # the set of `id: cachedeps` steps, so a third copy cannot arrive
+      # untested.
+      - name: Extract the cache-glob block from the YAML and run its suite
+        run: bash tests/cachedeps/run.sh
+
       # check-workflows.py runs in this same job below and is what makes its
       # assertions binding fleet-wide. That is also why it needs cases of its
       # own: a false positive in it reds the one required check on main and

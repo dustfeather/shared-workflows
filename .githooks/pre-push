@@ -116,6 +116,28 @@ else
   fi
 fi
 
+# --- 4b. cache-glob suite (python3, via extract.sh) ------------------------
+# The block it tests writes setup-node's `cache-dependency-path`, and with
+# `cache` set setup-node FAILS THE STEP rather than skipping when nothing in
+# that list resolves -- including on deploy-cloudflare.yml's deploy path. A
+# reusable workflow cannot be run from a local checkout, so extracting the
+# block is the only way to exercise it before it ships to every caller.
+if [ ! -f tests/cachedeps/run.sh ]; then
+  : # suite absent on this ref -- nothing to run
+elif ! command -v python3 >/dev/null 2>&1; then
+  echo "pre-push: python3 not found -- skipping cache-glob suite" >&2
+else
+  echo "pre-push: running the cache-glob suite"
+  if ! bash tests/cachedeps/run.sh; then
+    echo >&2
+    echo "pre-push: cache-glob suite failed -- push aborted." >&2
+    echo "pre-push: a wrong glob list is a hard step failure in every node" >&2
+    echo "pre-push: caller, and a too-broad one keys the cache off Cargo.lock" >&2
+    echo "pre-push: while still passing every shape assertion." >&2
+    failed=1
+  fi
+fi
+
 # --- 5. workflow lint (actionlint + shellcheck) ----------------------------
 # Same gate CI runs in the `guard` job. Locally it uses whatever actionlint is
 # installed, while CI pins a version — so a skew surfaces as a CI-only finding.

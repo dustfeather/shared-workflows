@@ -427,5 +427,49 @@ image_case("a quoted ARG value still agrees",
 image_case("an unquoted workflow literal still matches",
            {"a.yml": crg_workflow(literal="2.3.5")}, "ARG CRG_VERSION=2.3.5\n", None)
 
+# --- arc_runner_defaults() -----------------------------------------------
+# Third harness because the exception list is keyed on the BASENAME, so a case
+# is a filename plus a default, and the fixture has to control both.
+def arc_case(name, fname, default, expect):
+    """default: the `runner` input's default, or None to omit the input."""
+    global passed, failed
+    out = ["on:", "  workflow_call:"]
+    if default is not None:
+        out += ["    inputs:", "      runner:", "        type: string",
+                f'        default: "{default}"']
+    out += ["jobs:", "  a:", "    runs-on: ubuntu-latest", "    steps:",
+            "      - run: true"]
+    with tempfile.TemporaryDirectory() as d:
+        p = pathlib.Path(d) / fname
+        p.write_text("\n".join(out) + "\n")
+        problems = cw.arc_runner_defaults([str(p)])
+    joined = " | ".join(problems)
+    ok = (not problems) if expect is None else (expect in joined)
+    if ok:
+        print(f"PASS  {name}")
+        passed += 1
+    else:
+        print(f"FAIL  {name}\n      expected: {expect!r}\n      got: {joined or '(no findings)'}")
+        failed += 1
+
+
+arc_case("hosted default on an ordinary workflow", "node-test.yml", "ubuntu-latest", None)
+# The regression this exists for: a new workflow added by copying an existing
+# input block, which ships green while quietly putting its callers back on a
+# pool.
+arc_case("an arc-* default anywhere else is a finding", "new-thing.yml",
+         "arc-df-shared-workflows", "Since v8 every runner default is a hosted label")
+arc_case("deploy-k8s keeps its pool", "deploy-k8s.yml", "arc-df-shared-workflows", None)
+arc_case("deploy-helm keeps its pool", "deploy-helm.yml", "arc-df-shared-workflows", None)
+# The same mistake from the other side: "tidying" a cluster workflow onto the
+# hosted default costs nothing here and fails at deploy time, against an
+# RFC1918 address with no token.
+arc_case("a cluster workflow moved to hosted is a finding", "deploy-k8s.yml",
+         "ubuntu-latest", "is a cluster workflow")
+arc_case("no runner input at all: nothing to assert", "tag-release.yml", None, None)
+# A self-hosted label that is not an ARC scale set is out of scope on purpose:
+# the check asserts the fleet default, not a taxonomy of labels.
+arc_case("an unrelated label is not matched", "a.yml", "macos-14", None)
+
 print(f"\ncheck-workflows: {passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

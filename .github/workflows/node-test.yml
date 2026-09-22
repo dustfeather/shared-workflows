@@ -268,26 +268,56 @@ jobs:
       # Built in a step rather than inline in `with:` because the value is
       # multi-line, and a ${{ }} expression cannot produce a newline: the
       # obvious `format('{0}/*lock*{1}*lock*', ..., '\n')` emits a literal
-      # backslash-n. Runs at the job's default working-directory, so the
-      # globs are written from `working-dir` as a VALUE — setup-node resolves
-      # them against GITHUB_WORKSPACE, not against the step's cwd.
+      # backslash-n. The step never reads its own cwd — it writes `working-dir`
+      # out as a VALUE, and setup-node resolves the result against
+      # GITHUB_WORKSPACE — so it needs no `working-directory` override and has
+      # none, matching deploy-cloudflare.yml's copy.
       - name: Derive the lockfile globs for the cache key
         id: cachedeps
         env:
           OVERRIDE: ${{ inputs.cache-dependency-path }}
           WORKING_DIR: ${{ inputs.working-dir }}
-        working-directory: .
         run: |
+          # cachedeps-slice-begin
           set -eu
+          # Explicit lockfile names, not a `*lock*` glob. At the repo root that
+          # glob also matches Cargo.lock, poetry.lock, Gemfile.lock, flake.lock,
+          # composer.lock and .terraform.lock.hcl, so in a polyglot repo the node
+          # cache key would churn on every Rust or Python dependency change — on
+          # exactly the path this default exists to speed up. Worse for the
+          # "nothing resolved" guard: a repo carrying only a Cargo.lock at the
+          # root would SATISFY setup-node's lookup and key the cache off a file
+          # with nothing to do with node, instead of failing loudly. These four
+          # are every lockfile an install branch below can require (npm ci takes
+          # either of the first two), so the set matches the pm detection.
+          emit_locks() {
+            for f in package-lock.json npm-shrinkwrap.json yarn.lock pnpm-lock.yaml; do
+              if [ "$1" = "." ]; then printf '%s\n' "$f"; else printf '%s/%s\n' "$1" "$f"; fi
+            done
+          }
           {
             echo "globs<<CACHEDEPS_EOF"
             if [ -n "$OVERRIDE" ]; then
               printf '%s\n' "$OVERRIDE"
             else
-              printf '%s/*lock*\n*lock*\n' "$WORKING_DIR"
+              # An empty value would otherwise emit "/package-lock.json".
+              dir=${WORKING_DIR:-.}
+              dir=${dir%/}
+              emit_locks "${dir:-.}"
+              # The root copy too, for the workspace shape where the lockfile
+              # lives beside pnpm-workspace.yaml rather than beside the
+              # package.json. Skipped when they are the same directory, so the
+              # list never hashes one file twice. An `exit 0` here would be a
+              # bug, not a shortcut: this runs inside a { } group redirected to
+              # GITHUB_OUTPUT, so exiting would skip the CACHEDEPS_EOF
+              # delimiter and leave the step's output file unterminated.
+              if [ "${dir:-.}" != "." ]; then
+                emit_locks .
+              fi
             fi
             echo "CACHEDEPS_EOF"
           } >> "$GITHUB_OUTPUT"
+          # cachedeps-slice-end
 
       # A caller can pass any string, and the static check in
       # scripts/check-workflows.py cannot see it -- it only compares the defaults

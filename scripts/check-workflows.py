@@ -590,6 +590,63 @@ def runner_image_pin_drift(files, dockerfile="runner-image/Dockerfile"):
     return problems
 
 
+CLUSTER_WORKFLOWS = {"deploy-k8s.yml", "deploy-helm.yml"}
+
+
+def arc_runner_defaults(files):
+    """The v8 invariant, executable: `runner` defaults to a hosted label.
+
+    Since v8 every `runner` input defaults to `ubuntu-latest`, with exactly
+    two exceptions -- the workflows that talk to the cluster, which authenticate
+    as the runner pod's own ServiceAccount token and dial an RFC1918 address no
+    GitHub-hosted runner can route to. That was prose in CLAUDE.md and nothing
+    asserted it, so a new workflow added by copying an existing input block
+    would reintroduce an `arc-*` default in silence and ship green.
+
+    Asserted in BOTH directions on purpose. An unexpected `arc-*` default is
+    the regression; a cluster workflow quietly moved to a hosted default is the
+    same mistake from the other side, and it fails at deploy time. Between them
+    the exception list stops being a sentence and becomes the one place a third
+    exception has to be justified.
+    """
+    problems = []
+    for path in files:
+        name = os.path.basename(path)
+        try:
+            with open(path) as fh:
+                doc = yaml.safe_load(fh) or {}
+        except yaml.YAMLError:
+            continue  # the parse error is reported by main() already
+        # `on` is the YAML 1.1 boolean True once parsed, which is why this
+        # reads both spellings rather than the obvious one.
+        trigger = doc.get("on", doc.get(True)) or {}
+        if not isinstance(trigger, dict):
+            continue
+        call = trigger.get("workflow_call") or {}
+        runner = ((call.get("inputs") or {}).get("runner") or {})
+        if "default" not in runner:
+            continue
+        default = str(runner["default"])
+        cluster = name in CLUSTER_WORKFLOWS
+        if default.startswith("arc-") and not cluster:
+            problems.append(
+                f"{path}: the `runner` input defaults to {default!r}. Since v8 "
+                f"every runner default is a hosted label; the only workflows "
+                f"exempt are {sorted(CLUSTER_WORKFLOWS)}, which need the "
+                f"cluster's ServiceAccount token and an RFC1918 API address. A "
+                f"caller wanting a pool passes the label itself."
+            )
+        elif cluster and not default.startswith("arc-"):
+            problems.append(
+                f"{path}: is a cluster workflow but its `runner` input defaults "
+                f"to {default!r}. It authenticates as the runner pod's own "
+                f"mounted ServiceAccount token and dials an RFC1918 address, "
+                f"neither of which a GitHub-hosted runner has. Nothing here "
+                f"fails until a deploy does."
+            )
+    return problems
+
+
 def main():
     files = sorted(glob.glob(".github/workflows/*.yml"))
     if not files:
@@ -604,6 +661,7 @@ def main():
 
     found.extend(pnpm_pin_drift(files))
     found.extend(runner_image_pin_drift(files))
+    found.extend(arc_runner_defaults(files))
 
     for problem in found:
         print(f"  {problem}")
