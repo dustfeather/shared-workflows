@@ -10,19 +10,16 @@ on:
         default: dustfeather
       runner:
         description: |
-          Runner label for this job. Defaults to `arc-df-shared-workflows`;
-          a caller pinning a self-hosted pool normally names its own scale-set
-          (e.g. `arc-df-uninsta`, `arc-itguys-ro-invest`).
-
-          A GitHub-hosted label (`ubuntu-latest`) is equally valid and is what
-          the interactive callers use: every ARC pool lands on the same
-          single 4-core node, where a runner pod reserves 1000m as IO
-          admission control, so the whole cluster admits two runner pods at a
-          time. An interactive Claude session is minutes of API wait, not of
-          local CPU or disk, so holding one of those two slots for it starves
-          real CI for no gain. See ITGuys-RO/k3s-cluster#16.
+          Runner label for this job. Defaults to `ubuntu-latest`, which is what
+          the interactive callers already passed explicitly before v8 made it
+          the default: every ARC pool lands on the same single 4-core node,
+          where a runner pod reserves 1000m as IO admission control, so the
+          whole cluster admits two runner pods at a time. An interactive Claude
+          session is minutes of API wait, not of local CPU or disk, so holding
+          one of those two slots for it starves real CI for no gain. See
+          ITGuys-RO/k3s-cluster#16.
         type: string
-        default: "arc-df-shared-workflows"
+        default: "ubuntu-latest"
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true

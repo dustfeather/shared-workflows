@@ -93,6 +93,16 @@ Consequences a change here is most likely to get wrong:
   re-reads every unreleased commit on every run — a refusal there would wedge
   the workflow permanently, so it warns and downgrades instead.
 
+## Runners — hosted by default, ARC only for the cluster
+
+**Since v8 every `runner` input defaults to `ubuntu-latest`.** The two exceptions are `deploy-k8s.yml` and `deploy-helm.yml`, which keep `arc-df-shared-workflows` and always will: they authenticate as the runner pod's own mounted ServiceAccount token, and `k3s.itguys.ro` resolves to `192.168.1.5`, an RFC1918 address no GitHub-hosted runner can route to. Neither is a thing a flag turns off. The ARC scale sets in `ITGuys-RO/k3s-cluster` stay deployed for those two workflows and for nothing else; `runner-image/` and `runner-image.yml` stay with them, because those deploy jobs still need the image's baked `kubectl` and `envsubst`.
+
+**A self-hosted runner image is an undeclared dependency, and this repo has been bitten by it.** Anything installed by `runner-image/Dockerfile` is on PATH for every job on an ARC pool without being named anywhere in the workflow, so a workflow READS as self-contained while it is not. Before pointing anything else at `ubuntu-latest`, grep the Dockerfile for what that workflow consumes — and grep the whole workflow file for the tool's name, not just its `run:` blocks, because the reference may live inside a string handed to an action (a `settings:` JSON, a `with:` value, an `--mcp-config`). How loud the failure is depends on who calls the tool: a `run:` step gives you `command not found`, while an agent hook or an MCP server named in a JSON string fails once per invocation inside a subsystem whose errors read as "the agent regressed", and the job stays green. The v8 move paid this twice in `claude-code-review.yml` — `path_to_bun_executable` / `path_to_claude_code_executable` pointed at `/usr/local/bin/{bun,claude}` (a hard failure), and `code-review-graph` plus the `pr-review-toolkit` plugin were baked into the image and named in an `--mcp-config` and a prompt (both silent). Each is now an install-if-missing step guarded by `command -v`, so the two runner types stay on one code path; each pins a version that is a **second copy** of an `ARG` in the Dockerfile, and drift between them errors nowhere.
+
+A guard of the shape `command -v claude || exit 0` is worse than no guard when nothing puts the tool on PATH before the step: it makes the step a green no-op forever. The plugin step therefore installs the CLI when it is absent rather than bailing — plugin state is per-`$HOME`, not per-binary, so the copy the action later installs reads the same `~/.claude`.
+
+`package-manager-cache` in `node-test.yml` defaults **true** since v8, and `deploy-cloudflare.yml` passes `cache:` unconditionally, for the same reason inverted: a hosted runner starts from an empty store every job. Both defaulted off while every caller was on a pool mounting a persistent node-local store, where the restore round-trips that store through the throttled in-cluster cache service for nothing. A caller still pinned to an ARC pool should pass `package-manager-cache: false` — the two defaults are opposite for opposite reasons, and neither is the wrong one.
+
 ## Conventions
 
 - Inputs added to reusable workflow MUST default to value preserving prior behavior.
@@ -103,6 +113,6 @@ Consequences a change here is most likely to get wrong:
 
 Plain `Grep`/`Glob`/`Read` are the tools here. 18 YAML workflows, no call graph — a knowledge graph earns nothing on this repo.
 
-`code-review-graph` is **CI-only**: it exists on the `actions-runner-claude` ARC image, where `claude-code-review.yml` builds it and serves it over MCP to the review agent. It is not installed locally and no session here can call those tools. Any `.code-review-graph/` dir you find in a checkout is a stale leftover (gitignored) — delete it.
+`code-review-graph` is **CI-only**: `claude-code-review.yml` installs it (pinned, install-if-missing), builds the graph and serves it over MCP to the review agent. It used to come only from the `actions-runner-claude` ARC image; since v8 that workflow defaults to a hosted runner and declares the dependency itself. It is not installed locally and no session here can call those tools. Any `.code-review-graph/` dir you find in a checkout is a stale leftover (gitignored) — delete it.
 
 The local equivalent is the `graphify` CLI (pipx `graphifyy`, `graphify-out/` built in the app repos). Not wired as an MCP server; reach for it via the `graphify` skill, and only in a repo with real code to trace.

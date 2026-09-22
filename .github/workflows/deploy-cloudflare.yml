@@ -217,11 +217,13 @@ on:
         default: ""
       runner:
         description: |
-          Self-hosted ARC scale-set label for the runner pool. Defaults to
-          `arc-df-shared-workflows`; each caller normally pins its own
-          scale-set (e.g. `arc-df-dosar-rapid`).
+          Runner label for this job. Defaults to `ubuntu-latest` (GitHub-hosted),
+          which is where the whole fleet runs since v8. Pass a self-hosted ARC
+          scale-set label (e.g. `arc-df-uninsta`) only for a job that genuinely
+          needs the cluster; those pools are now kept alive only for
+          deploy-k8s.yml and deploy-helm.yml.
         type: string
-        default: "arc-df-shared-workflows"
+        default: "ubuntu-latest"
     secrets:
       NPM_TOKEN:
         description: |
@@ -427,12 +429,20 @@ jobs:
       - if: steps.pm.outputs.pm == 'bun'
         uses: oven-sh/setup-bun@v2
 
-      # No `cache:` — the ARC runners mount a persistent node-local store, so a
-      # restore round-trips it through the in-cluster cache service for nothing.
-      # Same reasoning as node-test.yml's package-manager-cache default.
+      # `cache:` follows the runner, which defaults to `ubuntu-latest` since
+      # v8 — a fresh store every job, so the restore is the only thing standing
+      # between this and a cold install. It is deliberately keyed off the
+      # detected package manager rather than exposed as an input: unlike
+      # node-test.yml this workflow has one job, so there is no second caller
+      # shape to serve. On an ARC pool the restore round-trips that pool's
+      # persistent node-local store through the in-cluster cache service for
+      # nothing; that is the cost of the shared default, and it is seconds.
+      # setup-node accepts npm/yarn/pnpm but not bun, so bun passes '' (which
+      # disables caching) exactly as node-test.yml does.
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
+          cache: ${{ steps.pm.outputs.pm != 'bun' && steps.pm.outputs.pm || '' }}
 
       - name: Install dependencies
         working-directory: ${{ steps.dirs.outputs.install }}

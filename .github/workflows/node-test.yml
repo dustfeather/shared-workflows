@@ -75,16 +75,21 @@ on:
       package-manager-cache:
         description: |
           Restore/save the package manager's download cache via
-          `actions/setup-node` (`cache: npm|yarn|pnpm`). OFF by default: every
-          caller runs on the self-hosted ARC pool, whose runners mount a
-          persistent node-local pnpm/npm store (hostPath on acer-laptop, via
-          npm_config_store_dir/npm_config_cache). The setup-node cache restore
-          round-trips that store through the throttled in-cluster GitHub
-          Actions cache service (~40s/job) — pure overhead. Turn ON only for a
-          GitHub-hosted caller, which has no persistent store. No effect when
-          the package manager is bun (setup-node has no bun cache mode).
+          `actions/setup-node` (`cache: npm|yarn|pnpm`). ON by default since
+          v8, because `runner` now defaults to `ubuntu-latest`, which starts
+          from an empty store every job and has nothing else to restore from.
+
+          It defaulted to false for as long as every caller ran on the
+          self-hosted ARC pool, whose runners mount a persistent node-local
+          pnpm/npm store (hostPath on acer-laptop, via
+          npm_config_store_dir/npm_config_cache); there the restore round-trips
+          that store through the throttled in-cluster GitHub Actions cache
+          service (~40s/job) for nothing. Turn it back OFF for a caller still
+          pinned to such a pool — the two defaults are opposite for opposite
+          reasons, not one of them wrong. No effect when the package manager is
+          bun (setup-node has no bun cache mode).
         type: boolean
-        default: false
+        default: true
       working-dir:
         description: Directory containing package.json
         type: string
@@ -176,11 +181,13 @@ on:
         default: high
       runner:
         description: |
-          Self-hosted ARC scale-set label for the runner pool. Defaults to
-          `arc-df-shared-workflows`; each caller normally pins its own
-          scale-set (e.g. `arc-df-uninsta`, `arc-itguys-ro-invest`).
+          Runner label for this job. Defaults to `ubuntu-latest` (GitHub-hosted),
+          which is where the whole fleet runs since v8. Pass a self-hosted ARC
+          scale-set label (e.g. `arc-df-uninsta`) only for a job that genuinely
+          needs the cluster; those pools are now kept alive only for
+          deploy-k8s.yml and deploy-helm.yml.
         type: string
-        default: "arc-df-shared-workflows"
+        default: "ubuntu-latest"
     secrets:
       NPM_TOKEN:
         description: |
