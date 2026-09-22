@@ -209,6 +209,68 @@ case("bootstrap drifted from the default",
      "self-update would really run",
      env={"CHECK_PNPM_BOOTSTRAP": "1"}, fetch=lockfile("12.5.1"))
 
+# --- the native bootstrap: a bare major is checked by CONTAINMENT ---------
+# The default's SHAPE decides which lockfile is authoritative and which
+# comparison applies. These cases exist because the failure they guard is
+# silent: compare a bare major against the wrong lockfile and the check either
+# reports drift that is not there, or passes while self-update really runs.
+
+def native_lockfile(version, seen=None):
+    """Stub that also RECORDS which bootstrap lockfile was requested.
+
+    Keys off the URL exactly as `lockfile()` does: exe-lock.json stores the
+    version under `@pnpm/exe`, the other two under `pnpm`. A stub that always
+    answered `pnpm` would make the exact-version path read None and report
+    "could not read the bootstrap version" -- a stub bug wearing the costume of
+    a real finding.
+    """
+    def _fetch(url):
+        name = url.rsplit("/", 1)[-1].split("?")[0]
+        if seen is not None:
+            seen.append(name)
+        key = "@pnpm/exe" if "exe-lock" in name else "pnpm"
+        return {"packages": {f"node_modules/{key}": {"version": version}}}
+    return _fetch
+
+case("bare major satisfied by the native bootstrap",
+     {"guard-tests.yml": gate(), "node-test.yml": workflow(default="12", literal="12")},
+     None, env={"CHECK_PNPM_BOOTSTRAP": "1"}, fetch=native_lockfile("12.3.4"))
+case("bare major outside the bootstrap's major",
+     {"guard-tests.yml": gate(), "node-test.yml": workflow(default="13", literal="13")},
+     "which is outside it",
+     env={"CHECK_PNPM_BOOTSTRAP": "1"}, fetch=native_lockfile("12.3.4"))
+# A newer PATCH inside the major must stay quiet: that is the property that
+# lets Dependabot move the action SHA without touching the default.
+case("bootstrap moves within the major: still quiet",
+     {"guard-tests.yml": gate(), "node-test.yml": workflow(default="12", literal="12")},
+     None, env={"CHECK_PNPM_BOOTSTRAP": "1"}, fetch=native_lockfile("12.9.9"))
+# Below 12 there is no native bootstrap, so a range is NOT satisfiable and the
+# action would resolve it to the newest match and self-update.
+case("bare major below 12 has no native path",
+     {"guard-tests.yml": gate(), "node-test.yml": workflow(default="11", literal="11")},
+     "only treats a range as satisfiable on its native bootstrap for pnpm >= 12",
+     env={"CHECK_PNPM_BOOTSTRAP": "1"}, fetch=native_lockfile("12.3.4"))
+
+# The one that catches reading the WRONG file. A bare major must consult
+# native-lock.json and nothing else; an exact version must consult the other
+# two and never native-lock.json.
+_seen_native = []
+case("a bare major reads native-lock.json only",
+     {"guard-tests.yml": gate(), "node-test.yml": workflow(default="12", literal="12")},
+     None, env={"CHECK_PNPM_BOOTSTRAP": "1"},
+     fetch=native_lockfile("12.3.4", _seen_native))
+assert _seen_native == ["native-lock.json"], (
+    f"a bare major must read native-lock.json alone, read {_seen_native}")
+
+_seen_exact = []
+case("an exact version never reads native-lock.json",
+     {"guard-tests.yml": gate(), "node-test.yml": workflow()},
+     None, env={"CHECK_PNPM_BOOTSTRAP": "1"},
+     fetch=native_lockfile("9.99.9", _seen_exact))
+assert sorted(_seen_exact) == ["exe-lock.json", "pnpm-lock.json"], (
+    f"an exact version must read the two non-native locks, read {_seen_exact}")
+
+
 def _shape_changed(url):
     return {"packages": {"node_modules/pnpm": {"resolution": {}}}}
 

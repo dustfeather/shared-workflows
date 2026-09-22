@@ -229,6 +229,20 @@ BOOTSTRAP_LOCKS = {
     "exe-lock.json": "node_modules/@pnpm/exe",
 }
 
+# The THIRD bootstrap, added in ea17c68. `run.ts` selects it whenever the
+# requested version is a range inside pnpm 12 (`targetsPnpm12`), and then
+# short-circuits on `satisfies(bootstrapVersion, targetVersion)` rather than on
+# equality -- so a bare major needs the bootstrap to be IN it, not equal to it.
+# Two different lockfiles and two different comparisons; reading the wrong pair
+# is how this check would pass while self-update really ran.
+NATIVE_LOCK = ("native-lock.json", "node_modules/pnpm")
+
+# A bare major ("12"), the one range form the bash guard can compare with string
+# equality. Anything else -- "^12.0.0", ">=12 <13" -- is a range the action would
+# also accept, but the guard could not, so it is refused here rather than left to
+# fail confusingly at run time.
+BARE_MAJOR = re.compile(r"^\d+$")
+
 
 def pnpm_pin_drift(files):
     """Cross-file: the pnpm pin is a three-way agreement, not a per-file value.
@@ -422,7 +436,27 @@ def pnpm_pin_drift(files):
             )
         else:
             sha, want = pinned[0], next(iter(distinct_defaults))
-            for lock, key in BOOTSTRAP_LOCKS.items():
+            # Which lockfile is authoritative depends on the SHAPE of the
+            # default, exactly as `run.ts` decides it. A bare major >= 12 takes
+            # the native bootstrap and is satisfied by any version inside it; an
+            # exact version takes the other two and must equal them. Checking a
+            # bare major against pnpm-lock.json would compare "12" to "11.25.0"
+            # and report drift that is not there.
+            checks = {}
+            if BARE_MAJOR.match(want):
+                if int(want) < 12:
+                    problems.append(
+                        f"the `pnpm-version` default is the bare major {want!r}, "
+                        f"but action-setup only treats a range as satisfiable on "
+                        f"its native bootstrap for pnpm >= 12. Below that a range "
+                        f"resolves to the newest matching release and really runs "
+                        f"`pnpm self-update`. Use an exact version instead."
+                    )
+                else:
+                    checks = {NATIVE_LOCK[0]: NATIVE_LOCK[1]}
+            else:
+                checks = dict(BOOTSTRAP_LOCKS)
+            for lock, key in checks.items():
                 url = (
                     "https://api.github.com/repos/pnpm/action-setup/contents/"
                     f"src/install-pnpm/bootstrap/{lock}?ref={sha}"
@@ -470,6 +504,19 @@ def pnpm_pin_drift(files):
                         problems.append(msg)
                     else:
                         print(f"  note: {msg}", file=sys.stderr)
+                elif BARE_MAJOR.match(want):
+                    # Containment, not equality: the action short-circuits on
+                    # `satisfies(bootstrap, "12")`, which is true for every
+                    # 12.x. That is the whole reason the default needs no edit
+                    # when Dependabot moves the SHA within the major.
+                    if got.split(".")[0] != want:
+                        problems.append(
+                            f"pnpm-version defaults to the major {want}, but "
+                            f"action-setup@{sha[:7]} bootstraps {got} in {lock}, "
+                            f"which is outside it. The range would not be "
+                            f"satisfied, so self-update would really run. Move "
+                            f"the default to the major the SHA bootstraps."
+                        )
                 elif got != want:
                     problems.append(
                         f"pnpm-version defaults to {want}, but "

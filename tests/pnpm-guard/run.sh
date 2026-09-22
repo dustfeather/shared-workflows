@@ -54,7 +54,7 @@ t "default value, store set: silent"           0 "$BOOTSTRAP" /pnpm-store  "!::"
 # a guard that fell through to `exit 0` without printing would pass an
 # exit-status-only case while having stopped guarding.
 t "wrong value, no store: warns, does not fail" 0 10.33.4 UNSET \
-  "::warning::pnpm-version is '10.33.4' rather than the pinned action's bootstrap $BOOTSTRAP"
+  "::warning::pnpm-version is '10.33.4' rather than $BOOTSTRAP, which is what the pinned action serves without self-updating"
 t "wrong value, no store: not an ::error::"     0 10.33.4 UNSET "!::error::"
 # Empty is not set. A pool that exports the variable but leaves it blank has no
 # shared store, so it belongs on the warn path, not the refusing one.
@@ -62,7 +62,7 @@ t "wrong value, empty store: treated as unset"  0 10.33.4 ""    "::warning::"
 
 # The refusing branch -- the only one that may fail a caller's build.
 t "wrong value, store set: refuses"             1 10.33.4 /pnpm-store \
-  "::error::pnpm-version is '10.33.4', but pnpm/action-setup at the SHA pinned in this workflow bootstraps $BOOTSTRAP"
+  "::error::pnpm-version is '10.33.4', but the only value pnpm/action-setup serves from its own committed bootstrap at the SHA pinned in this workflow, without running 'pnpm self-update', is $BOOTSTRAP"
 t "refusal names the fault it prevents"         1 10.33.4 /pnpm-store "ERR_PNPM_BROKEN_PNPM_INSTALL"
 t "refusal names the remedy"                    1 10.33.4 /pnpm-store \
   "Remove the pnpm-version input to take the default"
