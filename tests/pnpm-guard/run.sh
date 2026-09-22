@@ -12,7 +12,14 @@
 D="$(cd "$(dirname "$0")" && pwd)"
 "$D/extract.sh" || { echo "extract.sh failed; refusing to run against a stale guard.sh"; exit 2; }
 
-BOOTSTRAP=11.19.0
+# Deliberately NOT the version the workflows ship. The suite injects this as
+# PNPM_BOOTSTRAP_VERSION itself, so it tests the guard's BEHAVIOUR and never the
+# shipped pin -- check-workflows.py is what asserts the real one against the
+# action's committed lockfiles. It used to hold the shipped value, which meant
+# every bootstrap bump left a stale literal here that passed, read as the
+# repo's pin, and was wrong. A number that could never be a real bootstrap ends
+# that: nothing to keep in sync, and nobody can mistake it for the answer.
+BOOTSTRAP=9.99.9
 pass=0; fail=0
 
 t() { # name expected_exit requested store_value(unset with the literal UNSET) [expected_substring]
@@ -47,7 +54,7 @@ t "default value, store set: silent"           0 "$BOOTSTRAP" /pnpm-store  "!::"
 # a guard that fell through to `exit 0` without printing would pass an
 # exit-status-only case while having stopped guarding.
 t "wrong value, no store: warns, does not fail" 0 10.33.4 UNSET \
-  "::warning::pnpm-version is '10.33.4' rather than the pinned action's bootstrap 11.19.0"
+  "::warning::pnpm-version is '10.33.4' rather than the pinned action's bootstrap $BOOTSTRAP"
 t "wrong value, no store: not an ::error::"     0 10.33.4 UNSET "!::error::"
 # Empty is not set. A pool that exports the variable but leaves it blank has no
 # shared store, so it belongs on the warn path, not the refusing one.
@@ -55,7 +62,7 @@ t "wrong value, empty store: treated as unset"  0 10.33.4 ""    "::warning::"
 
 # The refusing branch -- the only one that may fail a caller's build.
 t "wrong value, store set: refuses"             1 10.33.4 /pnpm-store \
-  "::error::pnpm-version is '10.33.4', but pnpm/action-setup at the SHA pinned in this workflow bootstraps 11.19.0"
+  "::error::pnpm-version is '10.33.4', but pnpm/action-setup at the SHA pinned in this workflow bootstraps $BOOTSTRAP"
 t "refusal names the fault it prevents"         1 10.33.4 /pnpm-store "ERR_PNPM_BROKEN_PNPM_INSTALL"
 t "refusal names the remedy"                    1 10.33.4 /pnpm-store \
   "Remove the pnpm-version input to take the default"

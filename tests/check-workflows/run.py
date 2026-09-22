@@ -30,7 +30,7 @@ SHA = "0977fd99725f1db4007ccb2928dbb4e90d06cc86"
 OTHER_SHA = "1111111111111111111111111111111111111111"
 
 
-def workflow(default="11.19.0", ref=SHA, literal="11.19.0", calls=True):
+def workflow(default="9.99.9", ref=SHA, literal="9.99.9", calls=True):
     """A minimal workflow with the three legs of the pin, each independently
     removable -- which is what lets a case isolate one leg at a time."""
     out = [
@@ -161,7 +161,7 @@ case("clean tree: no findings",
 
 # --- one leg at a time ---------------------------------------------------
 case("two workflows, disagreeing defaults",
-     {"guard-tests.yml": gate(), "a.yml": workflow(default="11.19.0"),
+     {"guard-tests.yml": gate(), "a.yml": workflow(default="9.99.9"),
       "b.yml": workflow(default="12.0.0", literal="12.0.0")},
      "the `pnpm-version` defaults disagree")
 case("floating ref instead of a SHA",
@@ -174,7 +174,7 @@ case("calls the action but ships no guard",
      {"guard-tests.yml": gate(), "node-test.yml": workflow(literal=None)},
      "has no PNPM_BOOTSTRAP_VERSION guard step")
 case("guard literal disagrees with the default",
-     {"guard-tests.yml": gate(), "node-test.yml": workflow(default="11.19.0", literal="10.0.0")},
+     {"guard-tests.yml": gate(), "node-test.yml": workflow(default="9.99.9", literal="10.0.0")},
      "while the `pnpm-version` default is")
 case("guard literal with no input to mirror",
      {"guard-tests.yml": gate(), "node-test.yml": workflow(default=None, calls=False)},
@@ -203,7 +203,7 @@ case("a COMMENT naming the opt-out is not the opt-out",
 # --- the network leg, stubbed --------------------------------------------
 case("bootstrap matches the default",
      {"guard-tests.yml": gate(), "node-test.yml": workflow()},
-     None, env={"CHECK_PNPM_BOOTSTRAP": "1"}, fetch=lockfile("11.19.0"))
+     None, env={"CHECK_PNPM_BOOTSTRAP": "1"}, fetch=lockfile("9.99.9"))
 case("bootstrap drifted from the default",
      {"guard-tests.yml": gate(), "node-test.yml": workflow()},
      "self-update would really run",
@@ -247,7 +247,7 @@ case("SOFT does not silence a real drift",
 case("bootstrap check refuses on a non-single-valued pin",
      {"guard-tests.yml": gate(), "a.yml": workflow(), "b.yml": workflow(ref=OTHER_SHA)},
      "the SHA or the default is not single-valued",
-     env={"CHECK_PNPM_BOOTSTRAP": "1"}, fetch=lockfile("11.19.0"))
+     env={"CHECK_PNPM_BOOTSTRAP": "1"}, fetch=lockfile("9.99.9"))
 
 # --- the gate assertion must be STEP-scoped, not file-scoped -------------
 # A union over every env: map in the file asserts only that the file SOMEWHERE
