@@ -56,10 +56,10 @@ on:
           and proceeds. See the comment below.
         type: string
         # Must equal pnpm/action-setup's bootstrap version at the SHA pinned on the
-        # `uses:` line below (11.19.0), NOT the runner image's pnpm. Any other value
+        # `uses:` line below (11.25.0), NOT the runner image's pnpm. Any other value
         # runs pnpm's self-installer through the shared store and breaks every job
         # after the first. Full rationale in node-test.yml; keep the three in sync.
-        default: "11.19.0"
+        default: "11.25.0"
 
 # Default for the whole file. `prepare` and `release` raise themselves to
 # `contents: write` for the version commit and the GitHub release; `build`,
@@ -203,7 +203,7 @@ jobs:
       # scripts/check-workflows.py asserts that it does.
       - name: Reject a pnpm-version the pinned action does not bootstrap
         env:
-          PNPM_BOOTSTRAP_VERSION: "11.19.0"
+          PNPM_BOOTSTRAP_VERSION: "11.25.0"
           REQUESTED: ${{ inputs.pnpm-version }}
         run: |
           set -euo pipefail
