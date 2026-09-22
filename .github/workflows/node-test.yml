@@ -24,8 +24,19 @@ on:
         # `npm ci` against its own committed bootstrap lockfile every time, so the
         # image's pnpm is never consulted. At the SHA pinned on the `uses:` line
         # below, `src/install-pnpm/bootstrap/{pnpm,exe}-lock.json` both pin 11.25.0.
-        # The action then runs `pnpm self-update <this input>` unconditionally; at
-        # 11.25.0 that is a no-op, and nothing else happens.
+        # (ea17c68 added a THIRD bootstrap, `native-lock.json`, selected only when
+        # the requested version targets pnpm 12. The guard refuses every such value
+        # before that path can be reached, so the two above are the whole set that
+        # matters here -- but the set is three, not two.)
+        #
+        # The action then compares this input against that bootstrap and returns
+        # early when they are equal: at 11.25.0 `pnpm self-update` does not run at
+        # all. It used to run unconditionally and merely no-op, which is what this
+        # comment said until ea17c68 added the short-circuit (`run.ts`: `if
+        # (targetVersion === bootstrapVersion ...) return { exitCode: 0 }`). Same
+        # outcome, stricter mechanism -- recorded because this comment is the spec
+        # the next reader works from.
+        #
         # Ask for anything else and the self-update really runs. It installs pnpm
         # THROUGH pnpm, so it honours the container's shared `pnpm_config_store_dir`:
         # pnpm lands in the shared store, the first job writes an entry missing
