@@ -90,6 +90,14 @@ on:
           Self-hosted ARC scale-set label. Must be a scale set inside the
           target cluster — auth is the runner pod's own ServiceAccount, so a
           GitHub-hosted runner cannot reach the cluster.
+
+          THIS INPUT IS THE FLEET'S ONE EXCEPTION. Every other workflow here
+          defaults to `ubuntu-latest` as of v8; these two cannot, because
+          `k3s.itguys.ro` resolves to 192.168.1.5 — an RFC1918 address a
+          GitHub-hosted runner can never reach — and because the credential is
+          the runner pod's own mounted ServiceAccount token, which exists only
+          inside the cluster. The ARC scale sets stay deployed for this
+          workflow and deploy-k8s.yml, and for nothing else.
         type: string
         default: "arc-df-shared-workflows"
 

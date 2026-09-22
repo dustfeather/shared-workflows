@@ -26,12 +26,15 @@ on:
         default: false
       runner:
         description: |
-          Self-hosted ARC scale-set label for the runner pool. Defaults to
-          `arc-df-shared-workflows`; each caller normally pins its own
-          scale-set (e.g. `arc-df-uninsta`, `arc-itguys-ro-invest`). Must be a
-          label backed by the pre-baked `actions-runner-claude` image.
+          Runner label for this job. Defaults to `ubuntu-latest` (GitHub-hosted);
+          since v8 that is the default for every `runner` input here, where it
+          used to be an `arc-*` scale set. Pass a self-hosted scale-set label
+          (e.g. `arc-df-uninsta`) only for a job that genuinely needs the
+          cluster — `deploy-k8s.yml` and `deploy-helm.yml` are the two that
+          always will. A default is not a migration: a caller that passes a
+          label keeps its pool, this repo's own shims included.
         type: string
-        default: "arc-df-shared-workflows"
+        default: "ubuntu-latest"
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -84,12 +87,52 @@ jobs:
         with:
           fetch-depth: 1
 
+      # This step exists because the workflow used to get code-review-graph
+      # from the pre-baked `actions-runner-claude` image and name it nowhere.
+      # Anything installed by runner-image/Dockerfile is on PATH for every job
+      # on an ARC pool without appearing in the workflow, so the file READ as
+      # self-contained while it was not, and moving the default to
+      # `ubuntu-latest` in v8 replaces that whole surface at once. The
+      # `command -v` guard keeps the ARC pools on the same code path instead
+      # of forking into two.
+      #
+      # `continue-on-error` is deliberate HERE and only here: the agent prompt
+      # carries an explicit `gh pr diff` fallback, so a review without the
+      # graph is degraded rather than wrong, and blocking every review on a
+      # PyPI hiccup would be the worse trade. It is not a licence to bury a
+      # failure that has no fallback.
+      #
+      # CRG_VERSION is a SECOND COPY of the ARG in runner-image/Dockerfile.
+      # Bump both together. Nothing at RUNTIME errors when they drift — the
+      # two runner types just build the graph with different parsers, and the
+      # symptom is "the review got worse on one runner type", which nobody
+      # traces back to a version literal. So the agreement is asserted
+      # statically instead: scripts/check-workflows.py's
+      # runner_image_pin_drift() fails when this value and `ARG CRG_VERSION`
+      # disagree, or when the ARG is gone, and that script is a step of the
+      # `guard` job — the one required status check on main. Same treatment
+      # the pnpm three-way agreement gets, for the same reason.
+      - name: Ensure code-review-graph is installed
+        if: steps.codeql_gate.outputs.skip != 'true'
+        continue-on-error: true
+        env:
+          CRG_VERSION: "2.3.5"
+        run: |
+          set -euo pipefail
+          if command -v code-review-graph >/dev/null 2>&1; then
+            echo "code-review-graph already present: $(code-review-graph --version)"
+            exit 0
+          fi
+          python3 -m pip install --no-cache-dir --break-system-packages \
+            "code-review-graph==${CRG_VERSION}"
+          code-review-graph --version
+
       - name: Build code review graph
         # Parses the checkout into code-review-graph's structural graph so the
         # MCP server (wired into claude_args below) can answer blast-radius /
         # impact / review-context queries. continue-on-error so a review is
-        # NEVER blocked if the tool is missing (e.g. runner image not yet
-        # rebuilt) or the build fails — the agent prompt falls back to gh pr diff.
+        # NEVER blocked if the tool is missing or the build fails — the agent
+        # prompt falls back to gh pr diff.
         if: steps.codeql_gate.outputs.skip != 'true'
         continue-on-error: true
         run: code-review-graph build
@@ -101,10 +144,13 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allowed_bots: ${{ inputs.allowed-bots }}
           show_full_output: ${{ inputs.show-full-output }}
-          # Hardcoded to the pre-baked `actions-runner-claude` image paths;
-          # skips the action's in-job Bun + Claude Code installs.
-          path_to_bun_executable: /usr/local/bin/bun
-          path_to_claude_code_executable: /usr/local/bin/claude
+          # No `path_to_bun_executable` / `path_to_claude_code_executable`.
+          # Those pointed at /usr/local/bin/{bun,claude}, which exist only on
+          # the pre-baked ARC image; on `ubuntu-latest` the action fails
+          # outright rather than falling back. Letting the action install its
+          # own Bun and Claude Code costs ~10-25s per job and works on both
+          # runner types. A caller still on an ARC pool pays that too — the
+          # alternative is a path that is wrong on the default.
           prompt: |
             Review pull request #${{ github.event.pull_request.number }} in ${{ github.repository }}.
 

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Fixture cases for pnpm_pin_drift() in scripts/check-workflows.py.
+"""Fixture cases for the cross-file checks in scripts/check-workflows.py.
+
+Two of them: pnpm_pin_drift() and runner_image_pin_drift(). Both compare a
+literal in a workflow against a second copy of the same value living in another
+file, both are silent when they drift, and both ride the same required check.
 
 Why this exists: that function rides on the `guard` job, which is the one
 required status check on `main`, so a false positive in it reds every PR in
@@ -350,6 +354,155 @@ case("no step actually runs the script",
 case("a mention is not an invocation, so no env finding",
      {"guard-tests.yml": gate(runs=False), "node-test.yml": workflow()},
      "!effective env")
+
+
+# --- runner_image_pin_drift() --------------------------------------------
+# Separate harness because this check takes a second file that is NOT a
+# workflow, and because a missing one is a legitimate no-finding rather than
+# an error -- the distinction the cases below exist to pin down.
+def image_case(name, workflows, dockerfile, expect):
+    """dockerfile: the ARG file's contents, or None to leave it absent."""
+    global passed, failed
+    with tempfile.TemporaryDirectory() as d:
+        paths = []
+        for fname, body in workflows.items():
+            p = pathlib.Path(d) / fname
+            p.write_text(body)
+            paths.append(str(p))
+        docker = str(pathlib.Path(d) / "Dockerfile")
+        if dockerfile is not None:
+            pathlib.Path(docker).write_text(dockerfile)
+        problems = cw.runner_image_pin_drift(sorted(paths), dockerfile=docker)
+    joined = " | ".join(problems)
+    ok = (not problems) if expect is None else (expect in joined)
+    if ok:
+        print(f"PASS  {name}")
+        passed += 1
+    else:
+        print(f"FAIL  {name}\n      expected: {expect!r}\n      got: {joined or '(no findings)'}")
+        failed += 1
+
+
+def crg_workflow(literal='"2.3.5"', prose=None):
+    out = ["jobs:", "  review:", "    runs-on: ubuntu-latest", "    steps:"]
+    if literal is not None:
+        out += [
+            "      - name: Ensure code-review-graph is installed",
+            "        env:",
+            f"          CRG_VERSION: {literal}",
+            "        run: pip install code-review-graph",
+        ]
+    if prose is not None:
+        out += ["      - name: review", "        with:", f"          prompt: {prose}"]
+    return "\n".join(out) + "\n"
+
+
+image_case("agreeing pins: no findings",
+           {"a.yml": crg_workflow()}, "ARG CRG_VERSION=2.3.5\n", None)
+image_case("drifted pins",
+           {"a.yml": crg_workflow(literal='"2.4.0"')}, "ARG CRG_VERSION=2.3.5\n",
+           "pins CRG_VERSION=2.4.0")
+# A checkout without the image -- a fixture tree, or a consumer vendoring only
+# the workflows -- has nothing to disagree with, so it must stay quiet. Getting
+# this wrong reds the one required check for everyone who does not build the
+# image.
+image_case("absent Dockerfile is not a finding",
+           {"a.yml": crg_workflow()}, None, None)
+# The other direction: the image stopped installing it, so the workflow's
+# "second copy" comment is now a lie and the pin tracks nothing.
+image_case("Dockerfile present but the ARG is gone",
+           {"a.yml": crg_workflow()}, "ARG OTHER=1\n",
+           "declares no ARG CRG_VERSION")
+image_case("no literal in any workflow: nothing to compare",
+           {"a.yml": crg_workflow(literal=None)}, "ARG CRG_VERSION=2.3.5\n", None)
+# The anchor is the env KEY, not the version string. This workflow ships a
+# prompt quoting an unrelated 2.4.0; reading that as the pin would fail the
+# required check over prose, which is the shape that has already shipped twice
+# in this file's sibling regexes.
+image_case("a version in prose is not the pin",
+           {"a.yml": crg_workflow(prose="please use 2.4.0 of something else")},
+           "ARG CRG_VERSION=2.3.5\n", None)
+image_case("a quoted ARG value still agrees",
+           {"a.yml": crg_workflow()}, 'ARG CRG_VERSION="2.3.5"\n', None)
+image_case("an unquoted workflow literal still matches",
+           {"a.yml": crg_workflow(literal="2.3.5")}, "ARG CRG_VERSION=2.3.5\n", None)
+
+# --- arc_runner_defaults() -----------------------------------------------
+# Third harness because the exception list is keyed on the BASENAME, so a case
+# is a filename plus a default, and the fixture has to control both.
+def arc_case(name, fname, default, expect):
+    """default: the `runner` input's default, or None to omit the input."""
+    global passed, failed
+    out = ["on:", "  workflow_call:"]
+    if default is not None:
+        out += ["    inputs:", "      runner:", "        type: string",
+                f'        default: "{default}"']
+    out += ["jobs:", "  a:", "    runs-on: ubuntu-latest", "    steps:",
+            "      - run: true"]
+    with tempfile.TemporaryDirectory() as d:
+        p = pathlib.Path(d) / fname
+        p.write_text("\n".join(out) + "\n")
+        problems = cw.arc_runner_defaults([str(p)])
+    joined = " | ".join(problems)
+    ok = (not problems) if expect is None else (expect in joined)
+    if ok:
+        print(f"PASS  {name}")
+        passed += 1
+    else:
+        print(f"FAIL  {name}\n      expected: {expect!r}\n      got: {joined or '(no findings)'}")
+        failed += 1
+
+
+arc_case("hosted default on an ordinary workflow", "node-test.yml", "ubuntu-latest", None)
+# The regression this exists for: a new workflow added by copying an existing
+# input block, which ships green while quietly putting its callers back on a
+# pool.
+arc_case("an arc-* default anywhere else is a finding", "new-thing.yml",
+         "arc-df-shared-workflows", "Since v8 every runner default is a hosted label")
+arc_case("deploy-k8s keeps its pool", "deploy-k8s.yml", "arc-df-shared-workflows", None)
+arc_case("deploy-helm keeps its pool", "deploy-helm.yml", "arc-df-shared-workflows", None)
+# The same mistake from the other side: "tidying" a cluster workflow onto the
+# hosted default costs nothing here and fails at deploy time, against an
+# RFC1918 address with no token.
+arc_case("a cluster workflow moved to hosted is a finding", "deploy-k8s.yml",
+         "ubuntu-latest", "is a cluster workflow")
+arc_case("no runner input at all: nothing to assert", "tag-release.yml", None, None)
+
+
+def arc_nodefault_case(name, fname, expect):
+    """A `runner` input that exists but declares no default -- what
+    release-extension.yml shipped until v8, and the shape with no `arc-`
+    string for either branch above to match on."""
+    global passed, failed
+    body = "\n".join([
+        "on:", "  workflow_call:", "    inputs:", "      runner:",
+        "        type: string", "        required: true",
+        "jobs:", "  a:", "    runs-on: ubuntu-latest", "    steps:",
+        "      - run: true",
+    ]) + "\n"
+    with tempfile.TemporaryDirectory() as d:
+        p = pathlib.Path(d) / fname
+        p.write_text(body)
+        problems = cw.arc_runner_defaults([str(p)])
+    joined = " | ".join(problems)
+    ok = (not problems) if expect is None else (expect in joined)
+    if ok:
+        print(f"PASS  {name}")
+        passed += 1
+    else:
+        print(f"FAIL  {name}\n      expected: {expect!r}\n      got: {joined or '(no findings)'}")
+        failed += 1
+
+
+arc_nodefault_case("required: true with no default is a finding", "a.yml",
+                   "declares a `runner` input with no default")
+# Absent is not the same as present-without-a-default: six of this repo's own
+# workflows declare no `runner` input, and conflating the two reported every
+# one of them.
+arc_case("a workflow with no workflow_call trigger is quiet", "tag-release.yml", None, None)
+# A self-hosted label that is not an ARC scale set is out of scope on purpose:
+# the check asserts the fleet default, not a taxonomy of labels.
+arc_case("an unrelated label is not matched", "a.yml", "macos-14", None)
 
 print(f"\ncheck-workflows: {passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

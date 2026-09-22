@@ -215,13 +215,48 @@ on:
           Set it only when that resolution fails.
         type: string
         default: ""
+      package-manager-cache:
+        description: |
+          Restore/save the package manager's download cache via
+          `actions/setup-node` (`cache: npm|yarn|pnpm`). ON by default since
+          v8, matching node-test.yml and for the same reason: `runner` now
+          defaults to `ubuntu-latest`, which starts from an empty store every
+          job.
+
+          Exists so this workflow is no less recoverable than node-test.yml.
+          With `cache` set, setup-node FAILS THE STEP rather than skipping
+          when the lookup resolves nothing, and a deploy is the worst path to
+          learn that on. Turn it OFF for a lockfile layout the derived globs
+          do not reach, or for a caller still pinned to an ARC pool, whose
+          persistent node-local store makes the restore pure overhead.
+          `install-dir` is NOT the escape hatch — it also moves where the
+          install runs. No effect when the package manager is bun (setup-node
+          has no bun cache mode).
+        type: boolean
+        default: true
+      cache-dependency-path:
+        description: |
+          Overrides the glob list `actions/setup-node` hashes for the cache
+          key. Newline-separated; paths resolve from the repo root, not from
+          `install-dir`. Empty (the default) derives a list covering the
+          lockfile beside the Worker and the lockfile at the repo root. Reach
+          for this when it lives at neither — a nested workspace whose
+          lockfile sits one level above the Worker, say. Ignored when
+          `package-manager-cache` is false, and when the package manager is
+          bun.
+        type: string
+        default: ""
       runner:
         description: |
-          Self-hosted ARC scale-set label for the runner pool. Defaults to
-          `arc-df-shared-workflows`; each caller normally pins its own
-          scale-set (e.g. `arc-df-dosar-rapid`).
+          Runner label for this job. Defaults to `ubuntu-latest` (GitHub-hosted);
+          since v8 that is the default for every `runner` input here, where it
+          used to be an `arc-*` scale set. Pass a self-hosted scale-set label
+          (e.g. `arc-df-uninsta`) only for a job that genuinely needs the
+          cluster — `deploy-k8s.yml` and `deploy-helm.yml` are the two that
+          always will. A default is not a migration: a caller that passes a
+          label keeps its pool, this repo's own shims included.
         type: string
-        default: "arc-df-shared-workflows"
+        default: "ubuntu-latest"
     secrets:
       NPM_TOKEN:
         description: |
@@ -346,6 +381,60 @@ jobs:
           set -eu
           echo "install=${INSTALL_DIR:-$WORKING_DIR}" >> "$GITHUB_OUTPUT"
 
+      # See node-test.yml's equivalent step for why this is a step and not an
+      # inline expression. `install-dir` is not the escape hatch for a lockfile
+      # the globs miss: it also moves where the install RUNS, which is a
+      # behaviour change bought to fix a cache key. `cache-dependency-path`
+      # and `package-manager-cache` are the escape hatches, mirroring
+      # node-test.yml — a deploy is the last path that should be the one with
+      # no way out.
+      - name: Derive the lockfile globs for the cache key
+        id: cachedeps
+        env:
+          INSTALL: ${{ steps.dirs.outputs.install }}
+          OVERRIDE: ${{ inputs.cache-dependency-path }}
+        run: |
+          # cachedeps-slice-begin
+          set -eu
+          # Explicit lockfile names, not a `*lock*` glob. At the repo root that
+          # glob also matches Cargo.lock, poetry.lock, Gemfile.lock, flake.lock,
+          # composer.lock and .terraform.lock.hcl, so in a polyglot repo the node
+          # cache key would churn on every Rust or Python dependency change — on
+          # exactly the path this default exists to speed up. Worse for the
+          # "nothing resolved" guard: a repo carrying only a Cargo.lock at the
+          # root would SATISFY setup-node's lookup and key the cache off a file
+          # with nothing to do with node, instead of failing loudly. These four
+          # are every lockfile an install branch below can require (npm ci takes
+          # either of the first two), so the set matches the pm detection.
+          emit_locks() {
+            for f in package-lock.json npm-shrinkwrap.json yarn.lock pnpm-lock.yaml; do
+              if [ "$1" = "." ]; then printf '%s\n' "$f"; else printf '%s/%s\n' "$1" "$f"; fi
+            done
+          }
+          {
+            echo "globs<<CACHEDEPS_EOF"
+            if [ -n "$OVERRIDE" ]; then
+              printf '%s\n' "$OVERRIDE"
+            else
+              # An empty value would otherwise emit "/package-lock.json".
+              dir=${INSTALL:-.}
+              dir=${dir%/}
+              emit_locks "${dir:-.}"
+              # The root copy too, for the workspace shape where the lockfile
+              # lives beside pnpm-workspace.yaml rather than beside the
+              # package.json. Skipped when they are the same directory, so the
+              # list never hashes one file twice. An `exit 0` here would be a
+              # bug, not a shortcut: this runs inside a { } group redirected to
+              # GITHUB_OUTPUT, so exiting would skip the CACHEDEPS_EOF
+              # delimiter and leave the step's output file unterminated.
+              if [ "${dir:-.}" != "." ]; then
+                emit_locks .
+              fi
+            fi
+            echo "CACHEDEPS_EOF"
+          } >> "$GITHUB_OUTPUT"
+          # cachedeps-slice-end
+
       - name: Detect package manager
         id: pm
         working-directory: ${{ steps.dirs.outputs.install }}
@@ -427,12 +516,38 @@ jobs:
       - if: steps.pm.outputs.pm == 'bun'
         uses: oven-sh/setup-bun@v2
 
-      # No `cache:` — the ARC runners mount a persistent node-local store, so a
-      # restore round-trips it through the in-cluster cache service for nothing.
-      # Same reasoning as node-test.yml's package-manager-cache default.
+      # `cache:` follows the runner, which defaults to `ubuntu-latest` since
+      # v8 — a fresh store every job, so the restore is the only thing standing
+      # between this and a cold install. On an ARC pool it is the opposite: the
+      # restore round-trips that pool's persistent node-local store through the
+      # in-cluster cache service for nothing, which is why `package-manager-cache`
+      # exists and why a caller still pinned to a pool should pass `false`. The
+      # input mirrors node-test.yml's deliberately — a deploy is the last path
+      # that should be the one with no way out.
+      # setup-node accepts npm/yarn/pnpm but not bun, so bun passes '' (which
+      # disables caching) exactly as node-test.yml does.
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.package-manager-cache && steps.pm.outputs.pm != 'bun' && steps.pm.outputs.pm || '' }}
+          # Mandatory alongside `cache`, not an optimisation. Unset, setup-node
+          # looks for the lockfile in GITHUB_WORKSPACE only and THROWS
+          # `Dependencies lock file is not found` rather than skipping — so a
+          # Worker at `workers/api` holding its own lockfile, with none at the
+          # root, would fail its deploy on v8 having changed nothing.
+          # Two globs, newline-separated, because a single one is wrong for
+          # half the input space either way. setup-node hashes whatever the
+          # list resolves to and only fails when NOTHING resolves, so the pair
+          # covers the self-contained subdirectory (lockfile beside the
+          # package.json) and the workspace (one lockfile at the repo root,
+          # `working-dir` pointing at a member) without the caller choosing.
+          # With just the subdirectory glob a pnpm workspace fails
+          # `Some specified paths were not resolved, unable to cache
+          # dependencies`; with just the root glob the subdirectory shape fails
+          # `Dependencies lock file is not found`. Both are hard step failures,
+          # not cache misses. A repo with no lockfile anywhere is not a new
+          # break — every install branch below already requires one.
+          cache-dependency-path: ${{ steps.cachedeps.outputs.globs }}
 
       - name: Install dependencies
         working-directory: ${{ steps.dirs.outputs.install }}

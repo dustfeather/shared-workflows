@@ -93,11 +93,13 @@ on:
         default: "linux/amd64"
       runner:
         description: |
-          Runner label. Must be a scale set with a working docker daemon —
-          on the dind sets the daemon is now gated by a startupProbe, so the
-          old race against dockerd binding its socket no longer applies.
+          Runner label. Defaults to `ubuntu-latest`, which ships a running
+          docker daemon, so nothing here needs dind any more. A self-hosted ARC
+          label still works but must be a scale set with a working docker
+          daemon — on the dind sets the daemon is gated by a startupProbe, so
+          the old race against dockerd binding its socket does not apply.
         type: string
-        default: "arc-df-shared-workflows"
+        default: "ubuntu-latest"
     outputs:
       image:
         description: |

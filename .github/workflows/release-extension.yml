@@ -29,9 +29,14 @@ on:
   workflow_call:
     inputs:
       runner:
-        description: ARC scale-set label for this repo's runner pool.
-        required: true
+        description: |
+          Runner label for every job in this workflow, forwarded unchanged to
+          node-test.yml, publish-chrome.yml and publish-firefox.yml so all four
+          resolve the same pool. Optional since v8 — it was `required: true`
+          while there was no sensible fleet-wide default and each caller had to
+          name its own ARC scale set.
         type: string
+        default: "ubuntu-latest"
       targets:
         description: JSON array of build targets. chrome/firefox publish to stores; anything else is release-only.
         type: string

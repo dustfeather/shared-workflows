@@ -171,6 +171,14 @@ ACTION_SETUP_REF = re.compile(
     r"^\s*(?:-\s*)?uses:\s*pnpm/action-setup@(\S+)", re.MULTILINE
 )
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
+
+# Versions a workflow installs itself that runner-image/Dockerfile also bakes.
+# Keyed by the Dockerfile ARG; the value matches the workflow's own literal.
+# Anchored on the env key rather than a bare version string so an unrelated
+# "2.3.5" somewhere in a prompt cannot be read as this pin.
+PINNED_WITH_IMAGE = {
+    "CRG_VERSION": re.compile(r'^\s*CRG_VERSION:\s*"?([^"\s]+)"?\s*$', re.M),
+}
 # Matches the invocation, not a mention. Anchored at the start of a line
 # (after optional env-var prefixes, which is how the pre-push hook calls it),
 # so `echo "python3 scripts/check-workflows.py"`, a comment naming the script
@@ -527,6 +535,134 @@ def pnpm_pin_drift(files):
     return problems
 
 
+def runner_image_pin_drift(files, dockerfile="runner-image/Dockerfile"):
+    """Cross-file: a version pinned in a workflow AND in the runner image.
+
+    A workflow that installs a tool the runner image also bakes carries a
+    second copy of that tool's version. Nothing errors when the two drift —
+    the ARC pools and the GitHub-hosted runners simply run different builds of
+    it, and the symptom is "the review agent got worse on one runner type",
+    which nobody traces back to a version literal. That is the same silent
+    shape the guard in merge-on-approval.yml and the pnpm three-way agreement
+    exist to close, so it gets the same treatment: assert it statically rather
+    than leave a comment asking the next reader to remember.
+
+    Absent Dockerfile is not a finding — a checkout without it (a fixture
+    tree, a consumer vendoring only the workflows) has nothing to disagree
+    with. A literal present in the workflow with no matching ARG IS one: that
+    is the shape where the Dockerfile stopped installing the tool and the
+    workflow's pin became a lie nothing reads.
+    """
+    problems = []
+    if not os.path.exists(dockerfile):
+        return problems
+
+    with open(dockerfile) as fh:
+        docker = fh.read()
+
+    for arg, pattern in PINNED_WITH_IMAGE.items():
+        arg_match = re.search(rf"^ARG\s+{re.escape(arg)}=(\S+)\s*$", docker, re.M)
+        for path in files:
+            with open(path) as fh:
+                text = fh.read()
+            found = pattern.findall(text)
+            if not found:
+                continue
+            if arg_match is None:
+                problems.append(
+                    f"{path}: pins {arg}={found[0]} but {dockerfile} declares "
+                    f"no ARG {arg}. Either the image stopped installing it — "
+                    f"in which case the workflow is the only installer and the "
+                    f"comment claiming a second copy is wrong — or the ARG was "
+                    f"renamed and this pin now tracks nothing."
+                )
+                continue
+            want = arg_match.group(1).strip('"')
+            for got in found:
+                if got != want:
+                    problems.append(
+                        f"{path}: pins {arg}={got} but {dockerfile} bakes "
+                        f"{want}. Move both together. Nothing fails when these "
+                        f"drift: the hosted runners install {got} and the ARC "
+                        f"pools already carry {want}, and the only symptom is "
+                        f"two runner types quietly behaving differently."
+                    )
+    return problems
+
+
+CLUSTER_WORKFLOWS = {"deploy-k8s.yml", "deploy-helm.yml"}
+
+
+def arc_runner_defaults(files):
+    """The v8 invariant, executable: `runner` defaults to a hosted label.
+
+    Since v8 every `runner` input defaults to `ubuntu-latest`, with exactly
+    two exceptions -- the workflows that talk to the cluster, which authenticate
+    as the runner pod's own ServiceAccount token and dial an RFC1918 address no
+    GitHub-hosted runner can route to. That was prose in CLAUDE.md and nothing
+    asserted it, so a new workflow added by copying an existing input block
+    would reintroduce an `arc-*` default in silence and ship green.
+
+    Asserted in BOTH directions on purpose. An unexpected `arc-*` default is
+    the regression; a cluster workflow quietly moved to a hosted default is the
+    same mistake from the other side, and it fails at deploy time. Between them
+    the exception list stops being a sentence and becomes the one place a third
+    exception has to be justified.
+    """
+    problems = []
+    for path in files:
+        name = os.path.basename(path)
+        try:
+            with open(path) as fh:
+                doc = yaml.safe_load(fh) or {}
+        except yaml.YAMLError:
+            continue  # the parse error is reported by main() already
+        # `on` is the YAML 1.1 boolean True once parsed, which is why this
+        # reads both spellings rather than the obvious one.
+        trigger = doc.get("on", doc.get(True)) or {}
+        if not isinstance(trigger, dict):
+            continue
+        call = trigger.get("workflow_call") or {}
+        inputs = call.get("inputs") or {}
+        # Absent is not the same as present-without-a-default, and conflating
+        # them reported six workflows that declare no `runner` input at all.
+        if "runner" not in inputs:
+            continue
+        runner = inputs.get("runner") or {}
+        if "default" not in runner:
+            # A `runner` input with no default at all is invisible to both
+            # branches below, and it is not hypothetical: release-extension.yml
+            # shipped `required: true` until v8. Every caller then has to name
+            # a label, which in this account means an ARC one -- the v8 default
+            # reaching nobody, without a single `arc-` string to match on.
+            problems.append(
+                f"{path}: declares a `runner` input with no default. Since v8 "
+                f"every one defaults to a hosted label; without a default each "
+                f"caller must name a pool, which is the pre-v8 fleet wearing a "
+                f"different spelling. Give it `default: \"ubuntu-latest\"`."
+            )
+            continue
+        default = str(runner["default"])
+        cluster = name in CLUSTER_WORKFLOWS
+        if default.startswith("arc-") and not cluster:
+            problems.append(
+                f"{path}: the `runner` input defaults to {default!r}. Since v8 "
+                f"every runner default is a hosted label; the only workflows "
+                f"exempt are {sorted(CLUSTER_WORKFLOWS)}, which need the "
+                f"cluster's ServiceAccount token and an RFC1918 API address. A "
+                f"caller wanting a pool passes the label itself."
+            )
+        elif cluster and not default.startswith("arc-"):
+            problems.append(
+                f"{path}: is a cluster workflow but its `runner` input defaults "
+                f"to {default!r}. It authenticates as the runner pod's own "
+                f"mounted ServiceAccount token and dials an RFC1918 address, "
+                f"neither of which a GitHub-hosted runner has. Nothing here "
+                f"fails until a deploy does."
+            )
+    return problems
+
+
 def main():
     files = sorted(glob.glob(".github/workflows/*.yml"))
     if not files:
@@ -540,6 +676,8 @@ def main():
             found.append(f"{path}: YAML parse error: {exc}")
 
     found.extend(pnpm_pin_drift(files))
+    found.extend(runner_image_pin_drift(files))
+    found.extend(arc_runner_defaults(files))
 
     for problem in found:
         print(f"  {problem}")
