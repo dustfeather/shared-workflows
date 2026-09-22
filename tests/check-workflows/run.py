@@ -554,6 +554,13 @@ def merge_case(name, expect, *, settings=GOOD_SETTINGS, env=None, gate_yaml=None
         os.environ["GITHUB_REPOSITORY"] = "o/r"
 
         def _fetch(url):
+            # Pin the URL. A stub answering ANY url leaves every case below
+            # passing unchanged if the check reads the wrong endpoint, or lets
+            # the hardcoded "dustfeather/shared-workflows" fallback win over a
+            # misspelled GITHUB_REPOSITORY -- and the "could not read o/r"
+            # assertions would not catch that, because the message is formatted
+            # from the slug rather than from what was actually fetched.
+            assert url == "https://api.github.com/repos/o/r", url
             if raise_exc is not None:
                 raise raise_exc
             return dict(settings)
