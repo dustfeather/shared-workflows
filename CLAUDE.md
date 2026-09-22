@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Library of reusable GitHub Actions workflows (`workflow_call`) in `.github/workflows/`, consumed by every other repo under this account via `uses: dustfeather/shared-workflows/.github/workflows/<name>.yml@v6`. No app code. A merged change ships to every caller on next run — treat blast radius accordingly. Four workflows are NOT callable — this repo's own automation: `tag-release.yml` (cuts the version tag), `pr-merge.yml` (lands a PR the review agent approved), `pr-checks.yml` (runs the review) and `guard-tests.yml` (runs the guard suite below, plus actionlint over every workflow).
+Library of reusable GitHub Actions workflows (`workflow_call`) in `.github/workflows/`, consumed by every other repo under this account via `uses: dustfeather/shared-workflows/.github/workflows/<name>.yml@v7`. No app code. A merged change ships to every caller on next run — treat blast radius accordingly. Four workflows are NOT callable — this repo's own automation: `tag-release.yml` (cuts the version tag), `pr-merge.yml` (lands a PR the review agent approved), `pr-checks.yml` (runs the review) and `guard-tests.yml` (runs the guard suite below, plus actionlint over every workflow).
 
 ## Verifying changes
 
@@ -16,7 +16,7 @@ Everything else: the checks are a YAML parse (`python3 -c "import yaml; yaml.saf
 
 ## Versioning — pick bump by caller impact
 
-`tag-release.yml` auto-tags every push to `main`: default bumps **patch** (wraps at 100 → minor; minor uncapped), re-points the floating major tag (currently `v6`). **major never bumped automatically.** Larger bump: put `#minor` or `#major` **in the PR title** when it lands through a PR, **on the commit subject** when pushed straight to `main` (largest wins). Match is fixed-string over the **subject** of **every commit in the push**, not just HEAD — one push fires one run, so a HEAD-only scan would drop a token from an earlier commit in a batch. Bodies are excluded on purpose: prose *discussing* a bump matched itself and cut a spurious minor. Don't write tokens verbatim unless you mean them — **in a PR title least of all**, since that text is now always the landing subject, so prose merely *naming* a token cuts that release. This is the same failure the body exclusion exists to stop, on the one channel where no exclusion is possible.
+`tag-release.yml` auto-tags every push to `main`: default bumps **patch** (wraps at 100 → minor; minor uncapped), re-points the floating major tag (currently `v7`). **major never bumped automatically.** Larger bump: put `#minor` or `#major` **in the PR title** when it lands through a PR, **on the commit subject** when pushed straight to `main` (largest wins). Match is fixed-string over the **subject** of **every commit in the push**, not just HEAD — one push fires one run, so a HEAD-only scan would drop a token from an earlier commit in a batch. Bodies are excluded on purpose: prose *discussing* a bump matched itself and cut a spurious minor. Don't write tokens verbatim unless you mean them — **in a PR title least of all**, since that text is now always the landing subject, so prose merely *naming* a token cuts that release. This is the same failure the body exclusion exists to stop, on the one channel where no exclusion is possible.
 
 **PR title, since 2026-09-14**, when `pr-merge.yml` moved to `merge-method: squash` so main's history verifies (a rebase merge is replayed server-side and arrives unsigned; GitHub signs a squash commit with its web-flow key). A squash lands one commit, and `merge-on-approval.yml` passes `--subject "<the PR title>"` so that commit's subject is the PR title by construction. The flag is what makes the rule single-valued: without it the subject comes from the repo's `squash_merge_commit_title`, and GitHub's default `COMMIT_OR_PR_TITLE` uses the commit's own subject on a single-commit PR, switching to the PR title only from two commits up — so the advice would depend on a per-repo setting and on the commit count. The guard refuses a merge when a bump asked for anywhere is missing from the PR title; the fix it names is editing the title, which needs no new commit and so does not drop the approving review. A direct push to `main` is unaffected — nothing replays it.
 
@@ -61,10 +61,14 @@ Consequences a change here is most likely to get wrong:
   land itself. Merge it by hand, or split: ship the input, let `tag-release.yml`
   move the major tag, then add the caller.
   Within one major that lag self-heals at the next tag. ACROSS a major it does
-  not: `tag-release.yml` re-points only the CURRENT major, so the v6 cut froze
-  `v5` exactly as the v5 cut froze `v4` at v4.14.2. **All five of this repo's own
-  pins were repointed to `@v6` by hand once v6.0.0 existed (#43)**, so its merges
-  now DO run the squash `--subject` and the bump-token guard described above. A
+  not: `tag-release.yml` re-points only the CURRENT major, so the v7 cut froze
+  `v6` at v6.2.4 (6c15ff7) exactly as the v6 cut froze `v5` and the v5 cut froze
+  `v4` at v4.14.2. **All five of this repo's own pins were repointed to `@v6` by
+  hand once v6.0.0 existed (#43), and to `@v7` once v7.0.1 existed (#56)** — the
+  two live self-calls plus the three usage comments — so its merges DO run the
+  squash `--subject` and the bump-token guard described above, and this repo is
+  not the one caller left behind on the major that shipped the pnpm-12 store
+  poisoning. A
   pin left behind on a frozen major is the one case where the rest of this file
   describes behaviour the repo is not actually getting — check the pins first
   when something here does not match what you observe.

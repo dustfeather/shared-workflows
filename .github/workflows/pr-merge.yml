@@ -98,14 +98,15 @@ jobs:
     # ships. That reasoning INVERTS once the tag stops moving, which is why
     # this pin did NOT stay on the frozen `@v5`: a frozen major is precisely
     # the "not exercising what it ships" case the floating pin exists to avoid.
-    # Repointed to `@v6` once v6.0.0 was cut (#43), so this repo's own merges
-    # now run the bump-token guard and the squash `--subject` they ship.
+    # Repointed to `@v6` once v6.0.0 was cut (#43), and to `@v7` once v7.0.1
+    # landed (#54, #56), so this repo's own merges keep running what it ships.
     #
-    # `@v4` is FROZEN at v4.14.2 and predates the close block entirely:
-    # tag-release.yml re-points only the CURRENT major, so the v5 cut stranded
-    # v4 where it stood. A pin left on `@v4` does not silently inherit
-    # anything; it keeps pre-v5 behaviour for good.
-    uses: dustfeather/shared-workflows/.github/workflows/merge-on-approval.yml@v6
+    # Every superseded major is FROZEN, not merely old: tag-release.yml
+    # re-points only the CURRENT major, so the v7 cut stranded v6 at v6.2.4
+    # (6c15ff7) just as the v5 cut had stranded v4 at v4.14.2. A pin left on
+    # one of those does not silently inherit anything — it keeps that major's
+    # behaviour for good.
+    uses: dustfeather/shared-workflows/.github/workflows/merge-on-approval.yml@v7
     with:
       runner: arc-df-shared-workflows
       # `direct`, not the reusable workflow's `auto` default, because

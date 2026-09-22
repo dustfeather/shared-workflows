@@ -21,19 +21,25 @@ jobs:
       pull-requests: write
       issues: read
       id-token: write
-    # `@v5`, floating, matching pr-merge.yml. `@v4` is FROZEN at v4.14.2 —
-    # tag-release.yml re-points only the CURRENT major, so the v5 cut stranded
-    # it — and a pin left there can never receive another change to
-    # claude-code-review.yml. That was invisible because the file is
-    # byte-identical between `v4` and `main` (verified 2026-09-13, empty
-    # `git diff v4 main`): latent drift, not live breakage, and it would have
-    # stayed invisible until the first real change to the review workflow.
+    # `@v7`, floating, matching pr-merge.yml. `@v6` is now FROZEN at v6.2.4
+    # (6c15ff7) — tag-release.yml re-points only the CURRENT major, so cutting
+    # v7 stranded v6 where it stood, exactly as the v5 cut had stranded v4
+    # before it. A pin left on a frozen major can never receive another change
+    # to claude-code-review.yml, and the staleness is invisible for as long as
+    # the file happens to match main.
     #
-    # This bump could not be shipped as a PR. `paths-ignore` above excludes
-    # this very file, so a PR touching ONLY it starts no "PR checks" run at
-    # all — no review, therefore no approval, therefore pr-merge.yml never
-    # fires and the PR cannot land itself. Landed directly on main instead.
-    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v6
+    # Leaving it on `@v6` had a second cost specific to this cut: v7 exists
+    # because v7.0.0 defaulted pnpm to "12" and poisoned a shared store
+    # (ERR_PNPM_BROKEN_PNPM_INSTALL), and v7.0.1 is the fix. All 19 callers
+    # were moved to `@v7`; this repo staying behind made it the only one not
+    # running what it ships.
+    #
+    # This bump cannot be shipped as a PR. `paths-ignore` above excludes this
+    # very file, so a PR touching ONLY it starts no "PR checks" run at all —
+    # no review, therefore no approval, therefore pr-merge.yml never fires and
+    # the PR cannot land itself. Landed directly on main instead, as the `@v6`
+    # bump before it was.
+    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v7
     with:
       runner: arc-df-shared-workflows
     secrets:
