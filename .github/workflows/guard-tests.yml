@@ -152,3 +152,45 @@ jobs:
           # No path argument: actionlint discovers every workflow in the repo,
           # so a newly added file is covered without editing this step.
           "${RUNNER_TEMP}/actionlint" -color
+
+  # The repo's own merge settings, in a job of their own because the thing that
+  # decides whether they are READABLE is a job-level property.
+  #
+  # Measured 2026-09-22 on a throwaway branch, both jobs in one run:
+  #   permissions: contents: read  -> squash_merge_commit_title ABSENT
+  #   permissions: contents: write -> squash_merge_commit_title "PR_TITLE"
+  # and `.permissions.push` came back FALSE in both, so the response's own push
+  # flag does not predict it -- the token's contents scope does. Leaving the
+  # check on the `guard` step above would therefore have reddened the one
+  # required status check on main on every single run.
+  #
+  # `if: github.event_name == 'push'` is not tidiness either. A `pull_request`
+  # run opened by dependabot[bot] gets a read-only token whatever this block
+  # says, so on the PR path the fields are unreadable by construction and the
+  # leg could only ever report "could not check". That is also why this is a
+  # separate job rather than a step: it CANNOT gate a PR, so pretending it does
+  # by living in the required job would be the green no-op this repo keeps
+  # removing. What it does do is turn main red immediately after a merge, which
+  # is the run before the next release is cut.
+  #
+  # CHECK_PNPM_BOOTSTRAP=1 is here because check-workflows.py asserts EVERY step
+  # that runs it enables the bootstrap leg; this job re-reads those lockfiles as
+  # a result, which is a few extra contents-API calls on pushes to main only.
+  settings:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Assert the repo's own squash subject and merge methods
+        env:
+          CHECK_PNPM_BOOTSTRAP: "1"
+          CHECK_MERGE_SETTINGS: "1"
+          # No MERGE_SETTINGS_SOFT, on purpose, exactly as above: absent fields
+          # must read as "could not check" and fail, never as a pass.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          python3 scripts/check-workflows.py

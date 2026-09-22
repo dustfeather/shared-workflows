@@ -535,6 +535,177 @@ def pnpm_pin_drift(files):
     return problems
 
 
+# The two repo settings the versioning rule in CLAUDE.md now rests on. Neither
+# lives in a file, which is exactly why they are asserted here: the rule "put
+# the bump token in the PR title" is single-valued only while the squash subject
+# comes from the PR title, and on the HUMAN merge path nothing passes
+# `--subject` -- `merge-on-approval.yml` is unreachable for a human PR since
+# pr-checks.yml gated the CI review to dependabot[bot]. With GitHub's default
+# COMMIT_OR_PR_TITLE a one-commit PR lands the COMMIT's subject, so a #minor
+# typed only in the title is dropped and a patch is cut, silently, on a release
+# that reaches every caller.
+#
+# allow_rebase_merge belongs to the same rule: a rebase merge is replayed
+# server-side and arrives UNSIGNED, which is what moving to squash was for.
+# Leaving it enabled left that hole open on the path a human actually clicks.
+MERGE_SETTINGS_EXPECTED = {
+    "squash_merge_commit_title": "PR_TITLE",
+    "allow_rebase_merge": False,
+    # Without squash the other two say nothing -- and this is the merge method
+    # merge-on-approval.yml defaults to, so a repo with it off cannot land a
+    # bot merge at all.
+    "allow_squash_merge": True,
+}
+
+
+def merge_settings_drift(files):
+    """The squash subject and the merge methods are repo SETTINGS, not files.
+
+    Runs only under CHECK_MERGE_SETTINGS=1, the same shape as the pnpm
+    bootstrap leg: the pre-push hook cannot reach the API offline, and a check
+    whose strictness comes from ambient CI is a green no-op waiting to happen.
+    """
+    problems = []
+
+    # The gate assertion is EXACTLY-ONE, not every-step -- the opposite shape
+    # from CHECK_PNPM_BOOTSTRAP above, and for a measured reason. Reading these
+    # settings needs a token with the `contents: write` scope (2026-09-22: with
+    # `contents: read` the three keys come back ABSENT; `.permissions.push` is
+    # false either way, so the response cannot be used to tell), and permissions
+    # are a JOB property. So the leg cannot ride the required `guard` job
+    # without either over-scoping it or reddening it on every run. Requiring it
+    # on every script-running step would demand exactly that.
+    #
+    # Requiring at least one is what stops the leg from being quietly dropped:
+    # delete the job and nothing else in this file or the suite would notice.
+    gate = "guard-tests.yml"
+    gate_path = next((p for p in files if p.endswith(gate)), None)
+    if gate_path is None:
+        # Not borrowed from pnpm_pin_drift's identical branch. Coverage taken
+        # from another function's assertion is coverage that disappears when
+        # that function is refactored, and this one has its own reason to
+        # exist: renaming this file leaves the settings asserted nowhere while
+        # every suite stays green.
+        problems.append(
+            f"{gate} is missing, so the squash subject and the merge methods "
+            f"are asserted nowhere in CI."
+        )
+    else:
+        try:
+            gate_doc = load(gate_path) or {}
+        except yaml.YAMLError:
+            gate_doc = {}
+        enabled = []
+        # The flag must come from the STEP, never from a workflow- or job-level
+        # env: those reach EVERY step that runs the script, including the one in
+        # the required `guard` job, whose `contents: read` token cannot read the
+        # settings at all. That shape passes an exactly-one count while reddening
+        # the one required status check on main on every run -- precisely the
+        # failure the separate `settings` job exists to avoid, arriving through
+        # the assertion meant to protect it.
+        for scope_name, scope in (("workflow", gate_doc.get("env")),):
+            if isinstance(scope, dict) and "CHECK_MERGE_SETTINGS" in scope:
+                problems.append(
+                    f"{gate_path}: CHECK_MERGE_SETTINGS is set at {scope_name} "
+                    f"level, so it reaches every step that runs "
+                    f"check-workflows.py -- including the one in the required "
+                    f"`guard` job, which has no token scope to read the settings "
+                    f"and would fail on every run. Set it on the settings step."
+                )
+        for job_name, job in (gate_doc.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            job_env = job.get("env")
+            if isinstance(job_env, dict) and "CHECK_MERGE_SETTINGS" in job_env:
+                problems.append(
+                    f"{gate_path}: CHECK_MERGE_SETTINGS is set at job level on "
+                    f"{job_name!r}, so it reaches every step in that job that "
+                    f"runs check-workflows.py rather than the one that has the "
+                    f"token scope for it. Set it on the settings step."
+                )
+            for step in job.get("steps") or []:
+                if not isinstance(step, dict):
+                    continue
+                if not SCRIPT_INVOCATION.search(str(step.get("run") or "")):
+                    continue
+                env = {}
+                for scope in (gate_doc.get("env"), job_env, step.get("env")):
+                    if isinstance(scope, dict):
+                        env.update(scope)
+                name = step.get("name") or "<unnamed step>"
+                step_env = step.get("env")
+                if isinstance(step_env, dict) and str(
+                    step_env.get("CHECK_MERGE_SETTINGS", "")
+                ) == "1":
+                    enabled.append(name)
+                if "MERGE_SETTINGS_SOFT" in env:
+                    problems.append(
+                        f"{gate_path}: the step {name!r} sets MERGE_SETTINGS_SOFT, "
+                        f"which downgrades an unreadable settings response to a "
+                        f"note. Only the pre-push hook may opt out."
+                    )
+        if not enabled:
+            problems.append(
+                f"{gate_path}: no step runs check-workflows.py with "
+                f"CHECK_MERGE_SETTINGS=1 in its OWN env, so the squash subject "
+                f"and the merge methods -- which decide which text cuts a "
+                f"release -- are asserted nowhere in CI."
+            )
+
+    if os.environ.get("CHECK_MERGE_SETTINGS") != "1":
+        return problems
+
+    slug = os.environ.get("GITHUB_REPOSITORY") or "dustfeather/shared-workflows"
+    soft = bool(os.environ.get("MERGE_SETTINGS_SOFT"))
+    try:
+        data = fetch_json(f"https://api.github.com/repos/{slug}")
+    except Exception as exc:  # noqa: BLE001 — network, reported not raised
+        msg = (
+            f"merge settings: could not read {slug} ({exc}). The squash subject "
+            f"decides which text cuts the release."
+        )
+        if soft:
+            print(f"  note: {msg}", file=sys.stderr)
+            return problems
+        problems.append(msg)
+        return problems
+
+    # ABSENT is not FALSE. These fields are omitted entirely for a caller whose
+    # token lacks the scope, and the response will NOT tell you which case you
+    # are in: measured 2026-09-22 (branch probe/token-visibility, two jobs in
+    # one run), an Actions token under `permissions: contents: read` gets a 200
+    # with none of the keys while `contents: write` gets all three -- and
+    # `.permissions.push` reads false in BOTH, so the body's own push flag is
+    # not the discriminator. An unauthenticated GET behaves like the read case.
+    # Treating a missing key as a mismatch would red a required check over a
+    # token question; treating it as a pass would verify nothing whenever the
+    # scope is wrong. Report it as "could not check", which is what it is.
+    missing = [k for k in MERGE_SETTINGS_EXPECTED if k not in data]
+    if missing:
+        msg = (
+            f"merge settings: {slug} answered without {', '.join(sorted(missing))} "
+            f"-- the API omits these when the token lacks the scope, so nothing "
+            f"was verified. In CI give the step a job with `contents: write`; "
+            f"locally set MERGE_SETTINGS_SOFT=1."
+        )
+        if soft:
+            print(f"  note: {msg}", file=sys.stderr)
+            return problems
+        problems.append(msg)
+        return problems
+
+    for key, want in MERGE_SETTINGS_EXPECTED.items():
+        got = data.get(key)
+        if got != want:
+            problems.append(
+                f"merge settings: {slug} has {key}={got!r}, expected {want!r}. "
+                f"See the versioning section of CLAUDE.md -- the bump token is "
+                f"read from the PR title, and these settings are what make that "
+                f"true on the human merge path."
+            )
+    return problems
+
+
 def runner_image_pin_drift(files, dockerfile="runner-image/Dockerfile"):
     """Cross-file: a version pinned in a workflow AND in the runner image.
 
@@ -678,6 +849,7 @@ def main():
     found.extend(pnpm_pin_drift(files))
     found.extend(runner_image_pin_drift(files))
     found.extend(arc_runner_defaults(files))
+    found.extend(merge_settings_drift(files))
 
     for problem in found:
         print(f"  {problem}")

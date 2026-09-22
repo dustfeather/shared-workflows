@@ -504,5 +504,176 @@ arc_case("a workflow with no workflow_call trigger is quiet", "tag-release.yml",
 # the check asserts the fleet default, not a taxonomy of labels.
 arc_case("an unrelated label is not matched", "a.yml", "macos-14", None)
 
+# --- the repo SETTINGS leg: squash subject and merge methods --------------
+# These live in no file, so the only thing a fixture can pin is how the check
+# reacts to each API shape. The one that matters is the third: the fields are
+# ABSENT, not false, for a caller without push access (measured on this public
+# repo unauthenticated), so "missing" must read as "could not check" rather
+# than as a pass -- otherwise the assertion quietly verifies nothing the day
+# the token changes, which is the failure mode it exists to prevent.
+GOOD_SETTINGS = {
+    "squash_merge_commit_title": "PR_TITLE",
+    "allow_rebase_merge": False,
+    "allow_squash_merge": True,
+}
+
+
+def merge_gate(check="1", soft=None, *, top_env=None, job_env=None):
+    """guard-tests.yml as merge_settings_drift() reads it: one step running the
+    script, carrying (or not) the two variables this leg is gated on."""
+    env = []
+    if check is not None:
+        env.append(("CHECK_MERGE_SETTINGS", check))
+    if soft is not None:
+        env.append(("MERGE_SETTINGS_SOFT", soft))
+    out = ["on:", "  push:"]
+    if top_env:
+        out += ["env:"] + [f'  {k}: "{v}"' for k, v in top_env.items()]
+    out += ["jobs:", "  guard:", "    runs-on: ubuntu-latest"]
+    if job_env:
+        out += ["    env:"] + [f'      {k}: "{v}"' for k, v in job_env.items()]
+    out += ["    steps:", "      - name: static checks"]
+    if env:
+        out += ["        env:"] + [f'          {k}: "{v}"' for k, v in env]
+    out += ["        run: python3 scripts/check-workflows.py"]
+    return "\n".join(out) + "\n"
+
+
+def merge_case(name, expect, *, settings=GOOD_SETTINGS, env=None, gate_yaml=None,
+               raise_exc=None, no_gate=False):
+    global passed, failed
+    keys = ("CHECK_MERGE_SETTINGS", "MERGE_SETTINGS_SOFT", "GITHUB_REPOSITORY")
+    saved = {k: os.environ.get(k) for k in keys}
+    saved_fetch = cw.fetch_json
+    try:
+        for k in keys:
+            os.environ.pop(k, None)
+        for k, v in ({"CHECK_MERGE_SETTINGS": "1"} | (env or {})).items():
+            if v is not None:
+                os.environ[k] = v
+        os.environ["GITHUB_REPOSITORY"] = "o/r"
+
+        def _fetch(url):
+            if raise_exc is not None:
+                raise raise_exc
+            return dict(settings)
+        cw.fetch_json = _fetch
+        with tempfile.TemporaryDirectory() as d:
+            # no_gate writes the same YAML under a DIFFERENT name: the point is
+            # a repo where guard-tests.yml is absent, not one with no workflows
+            # at all, so the case cannot pass for the trivial reason.
+            gp = pathlib.Path(d) / ("other.yml" if no_gate else "guard-tests.yml")
+            gp.write_text(gate_yaml if gate_yaml is not None else merge_gate())
+            problems = cw.merge_settings_drift([str(gp)])
+        joined = " | ".join(problems)
+        ok = (not problems) if expect is None else (expect in joined)
+        if ok:
+            print(f"PASS  {name}")
+            passed += 1
+        else:
+            print(f"FAIL  {name}\n      expected: {expect!r}\n      got: {joined or '(no findings)'}")
+            failed += 1
+    finally:
+        cw.fetch_json = saved_fetch
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+merge_case("settings as documented: quiet", None)
+merge_case("GitHub's default squash title is a finding", "squash_merge_commit_title='COMMIT_OR_PR_TITLE'",
+           settings=GOOD_SETTINGS | {"squash_merge_commit_title": "COMMIT_OR_PR_TITLE"})
+# An unsigned replay on the path a human actually clicks -- the hole the move
+# to squash was for.
+merge_case("rebase merge re-enabled is a finding", "allow_rebase_merge=True",
+           settings=GOOD_SETTINGS | {"allow_rebase_merge": True})
+merge_case("squash turned off is a finding", "allow_squash_merge=False",
+           settings=GOOD_SETTINGS | {"allow_squash_merge": False})
+# The important one. Absent fields must not read as a pass.
+merge_case("fields absent (no push access) is 'could not check', not silence",
+           "nothing was verified", settings={"name": "r"})
+merge_case("absent fields are a NOTE under the local opt-out", None,
+           settings={"name": "r"}, env={"MERGE_SETTINGS_SOFT": "1"})
+merge_case("an unreachable API is a finding by default", "could not read o/r",
+           raise_exc=RuntimeError("boom"))
+merge_case("an unreachable API is a note under the local opt-out", None,
+           raise_exc=RuntimeError("boom"), env={"MERGE_SETTINGS_SOFT": "1"})
+# Nothing is read at all without the flag, so the pre-push hook stays offline.
+merge_case("no flag: the network leg does not run", None,
+           env={"CHECK_MERGE_SETTINGS": None}, gate_yaml=merge_gate(),
+           raise_exc=RuntimeError("fetch_json must not be called"))
+# The gate assertions, same shape as the pnpm pair: strictness that the gate
+# itself can silently drop is not strictness.
+# The gate assertion is exactly-ONE, not every-step: the leg needs a job with
+# contents: write to read anything, so it cannot ride the required guard job.
+merge_case("no step enables the leg at all is a finding",
+           "asserted nowhere in CI", gate_yaml=merge_gate(check=None))
+merge_case("the gate taking the opt-out is a finding", "sets MERGE_SETTINGS_SOFT",
+           gate_yaml=merge_gate(soft="1"))
+# The shape this repo actually ships: two script-running steps, only the second
+# carrying the flag. Requiring it on EVERY step would report this as broken,
+# which is how the check would have forced itself onto the required job.
+merge_case("a second script step without the flag is not a finding", None,
+           gate_yaml=merge_gate(check=None) + "\n".join([
+               "  settings:",
+               "    runs-on: ubuntu-latest",
+               "    steps:",
+               "      - name: settings",
+               "        env:",
+               '          CHECK_MERGE_SETTINGS: "1"',
+               "        run: python3 scripts/check-workflows.py",
+           ]) + "\n")
+# ...and the opt-out is still refused wherever it sits, including on that
+# second step, so "put it on the other one" is not a way round it.
+merge_case("the opt-out on the SECOND step is still a finding",
+           "sets MERGE_SETTINGS_SOFT",
+           gate_yaml=merge_gate(check=None) + "\n".join([
+               "  settings:",
+               "    runs-on: ubuntu-latest",
+               "    steps:",
+               "      - name: settings",
+               "        env:",
+               '          CHECK_MERGE_SETTINGS: "1"',
+               '          MERGE_SETTINGS_SOFT: "1"',
+               "        run: python3 scripts/check-workflows.py",
+           ]) + "\n")
+# A step that only MENTIONS the script is not a step that runs it -- the same
+# trap the pnpm gate assertion has a case for.
+# Scope matters, not just presence. A workflow- or job-level flag reaches EVERY
+# script step -- including the one in the required `guard` job, whose
+# `contents: read` token cannot read the settings -- so it satisfies a naive
+# exactly-one count while reddening the required check on main on every run.
+# That is the failure the separate `settings` job exists to prevent, arriving
+# through the assertion meant to protect it.
+merge_case("a workflow-level flag is a finding", "set at workflow level",
+           gate_yaml=merge_gate(check=None,
+                                top_env={"CHECK_MERGE_SETTINGS": "1"}))
+merge_case("a job-level flag is a finding", "set at job level on 'guard'",
+           gate_yaml=merge_gate(check=None,
+                                job_env={"CHECK_MERGE_SETTINGS": "1"}))
+# ...and inheriting it does NOT satisfy the exactly-one requirement either, or
+# the finding above would be paired with a silent pass on the real question.
+merge_case("an inherited flag does not count as enabling the leg",
+           "asserted nowhere in CI",
+           gate_yaml=merge_gate(check=None,
+                                top_env={"CHECK_MERGE_SETTINGS": "1"}))
+# The gate file itself gone. pnpm_pin_drift reports this too, so today the repo
+# would not be blind -- but borrowed coverage vanishes when the lender is
+# refactored.
+merge_case("guard-tests.yml absent entirely is a finding",
+           "guard-tests.yml is missing", no_gate=True)
+merge_case("a mention of the script does not count as enabling the leg",
+           "asserted nowhere in CI",
+           gate_yaml="\n".join([
+               "on:", "  push:", "jobs:", "  guard:",
+               "    runs-on: ubuntu-latest", "    steps:",
+               "      - name: not really",
+               "        env:",
+               '          CHECK_MERGE_SETTINGS: "1"',
+               "        run: echo 'python3 scripts/check-workflows.py'",
+           ]) + "\n")
+
 print(f"\ncheck-workflows: {passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

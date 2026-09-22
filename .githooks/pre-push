@@ -34,10 +34,19 @@ else
   # refusal, so a push with no network is not blocked by a check that never
   # disagreed with anything. A real MISMATCH is still hard, soft or not.
   #
-  # This hook is the ONLY place that opts out. The script is strict by default
-  # precisely so the gate in CI cannot lose its strictness by omission, which
-  # is what an ambient-CI switch would have allowed.
-  if ! CHECK_PNPM_BOOTSTRAP=1 PNPM_BOOTSTRAP_SOFT=1 python3 scripts/check-workflows.py; then
+  # CHECK_MERGE_SETTINGS / MERGE_SETTINGS_SOFT: the same pair for the repo's own
+  # squash-subject and merge-method settings, which decide whether the PR title
+  # is what cuts the release. Locally the read is usually unauthenticated, and
+  # GitHub OMITS those fields for a caller without push access -- so the honest
+  # local verdict is "could not check", which SOFT turns into a note. A real
+  # mismatch, when the fields ARE visible, stays hard here too.
+  #
+  # This hook is the ONLY place that opts out, on both pairs. The script is
+  # strict by default precisely so the gate in CI cannot lose its strictness by
+  # omission, which is what an ambient-CI switch would have allowed.
+  if ! CHECK_PNPM_BOOTSTRAP=1 PNPM_BOOTSTRAP_SOFT=1 \
+       CHECK_MERGE_SETTINGS=1 MERGE_SETTINGS_SOFT=1 \
+       python3 scripts/check-workflows.py; then
     echo >&2
     echo "pre-push: workflow checks failed — push aborted." >&2
     echo "pre-push: these break every caller, so fix before pushing." >&2

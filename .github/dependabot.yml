@@ -24,12 +24,27 @@ updates:
     # Ignoring majors here would therefore silence the block entirely, which is
     # precisely the state this file was added to fix.
     #
-    # A major PR is safe to let Dependabot open: no workflow in this repo calls
-    # dependabot-auto-merge.yml on itself (it is shipped to callers, not used
-    # here), so the PR waits for a human. That human still owns the decision --
-    # tag-release.yml tags every push to main and re-points the floating v4, so
-    # merging ships to every consumer on their next run. Read the changelog for
-    # the caller-visible break and pick the #minor/#major token deliberately.
+    # A major PR is safe to let Dependabot OPEN. It is not safe to assume it
+    # then sits there. This block used to say "no workflow in this repo calls
+    # dependabot-auto-merge.yml on itself, so the PR waits for a human"; the
+    # first half is still true and the conclusion never was. pr-merge.yml runs
+    # on `pull_request_review` and merges on an approving review from
+    # `claude[bot]`, which is exactly what the review agent posts -- so a
+    # Dependabot PR here can land with no human in the loop, by the OTHER
+    # merge path.
+    #
+    # That path got narrower and more load-bearing on 2026-09-22: pr-checks.yml
+    # now gates the CI review to `dependabot[bot]`, so a Dependabot PR is the
+    # ONLY kind this repo still reviews, approves and merges by itself.
+    #
+    # And the merge ships: tag-release.yml tags every push to main and re-points
+    # the floating major (`v8` today), which every caller resolves at runtime.
+    # So the reviewing agent, not a human, is what stands between a major action
+    # bump and 20 caller repos. Read the changelog yourself on anything the
+    # agent approved but you would not have, and pick the #minor/#major token
+    # deliberately -- in the PR TITLE, which since 2026-09-22 is authoritative
+    # for the squash subject on every path (repo setting squash_merge_commit_title
+    # = PR_TITLE; see CLAUDE.md).
     #
     # The group below IS load-bearing now. node-test.yml, deploy-cloudflare.yml
     # and release-extension.yml pin `pnpm/action-setup` to a commit SHA, which
