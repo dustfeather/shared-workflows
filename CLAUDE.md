@@ -89,6 +89,21 @@ Consequences a change here is most likely to get wrong:
   which is strictly worse here — the first failure is visible, the second is
   not. Treat bundling as a failure mode, not a fallback.
 
+- **Since 2026-09-22 the review job is gated to Dependabot**, here and in all 19
+  other caller repos: `if: ... && github.event.pull_request.user.login ==
+  'dependabot[bot]'`. Human- and agent-authored PRs are reviewed locally against
+  the working diff before the push, which is where a finding is still free to
+  act on. The Dependabot track stays in CI because nobody is at a terminal when
+  Dependabot opens a PR, and because that review is what ends on an approve —
+  the event `dependabot-auto-merge.yml` and `merge-on-approval.yml` wait for.
+  Two consequences to hold onto: a human PR in this repo now gets **no approving
+  review**, so `pr-merge.yml` never fires and you merge it yourself (a manual
+  merge raises a real `push`, so `tag-release.yml` still tags it through its
+  push trigger, not the `workflow_run` one); and the gate lives in each caller's
+  shim rather than in `claude-code-review.yml`, because callers float on `@v8`
+  and a behaviour flip there would reach the whole fleet with no repin — the one
+  blast radius a policy change should not have.
+
 - **`#major` behaves asymmetrically by path.** On a real push range, a
   `#major` not on the head subject is a hard `exit 1`. On the `workflow_run`
   path there is no push range, so the scan spans last-release-tag..HEAD and
