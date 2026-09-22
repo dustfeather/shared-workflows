@@ -16,11 +16,21 @@ set -uo pipefail
 
 cd "$(dirname "$0")/../.." || exit 1
 
-mapfile -t SLICED < <(grep -l "cachedeps-slice-begin" .github/workflows/*.yml | sort)
+# Portable to bash 3.2 on purpose: read -r in a while loop rather than
+# mapfile (4.0), and the ${out#*"$needle"} substring test below rather than
+# [[ == * ]] with ${needle@Q} (4.4) -- the forms tests/guard/run.sh and
+# tests/pnpm-guard/run.sh already use. The pre-push hook declares this suite's
+# dependency as python3 alone, and on bash 3.2 mapfile is simply not found, so
+# SLICED never gets assigned and `set -u` kills the script at ${#SLICED[@]}:
+# the push aborts with "SLICED: unbound variable", which reads as a broken
+# suite rather than a missing dependency.
+SLICED=()
+while IFS= read -r f; do SLICED+=("$f"); done < <(grep -l "cachedeps-slice-begin" .github/workflows/*.yml | sort)
 # Anchored: an unanchored match also finds prose MENTIONING the step id --
 # guard-tests.yml carries exactly that in a comment -- which would report a
 # copy that does not exist and make this check impossible to satisfy.
-mapfile -t STEPPED < <(grep -lE "^[[:space:]]*id: cachedeps[[:space:]]*$" .github/workflows/*.yml | sort)
+STEPPED=()
+while IFS= read -r f; do STEPPED+=("$f"); done < <(grep -lE "^[[:space:]]*id: cachedeps[[:space:]]*$" .github/workflows/*.yml | sort)
 # Both sets empty compares equal, so the set check alone passes over nothing:
 # rename the markers and the step id in one tidy-up pass and this suite goes
 # green having exercised zero cases, in the pre-push hook and in the one
@@ -137,11 +147,11 @@ refute() {
     failed=$((failed + 1))
     return
   fi
-  if [[ "$got" != *"$needle"* ]]; then
+  if [ "${got#*"$needle"}" = "$got" ]; then
     echo "PASS  $name"
     passed=$((passed + 1))
   else
-    echo "FAIL  $name  (found ${needle@Q} in the output)"
+    echo "FAIL  $name  (found '$needle' in the output)"
     failed=$((failed + 1))
   fi
 }

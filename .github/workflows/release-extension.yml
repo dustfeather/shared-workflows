@@ -8,7 +8,7 @@
 #   concurrency: { group: release, cancel-in-progress: true }
 #   jobs:
 #     release:
-#       uses: dustfeather/shared-workflows/.github/workflows/release-extension.yml@v7
+#       uses: dustfeather/shared-workflows/.github/workflows/release-extension.yml@v8
 #       with:
 #         runner: arc-df-<repo>
 #         targets: '["chrome","firefox"]'   # discord-purge adds "userscript"
@@ -37,6 +37,26 @@ on:
           name its own ARC scale set.
         type: string
         default: "ubuntu-latest"
+      package-manager-cache:
+        description: |
+          Forwarded to node-test.yml's input of the same name, which defaults
+          `true` since v8. Passthroughs rather than a hardcoded value because
+          this workflow is where an extension caller would otherwise have no
+          say at all: before v8 it forwarded a `runner` and nothing else, so a
+          caller that dropped its ARC label landed on a hosted runner — empty
+          store every job — with no way to turn the cache on. Pass `false` from
+          a caller still pinned to a pool, where the restore round-trips that
+          pool's persistent store for nothing.
+        type: boolean
+        default: true
+      cache-dependency-path:
+        description: |
+          Forwarded to node-test.yml's input of the same name. Empty (the
+          default) lets it derive the list covering the lockfile beside the
+          package.json and the one at the repo root; set it for a layout
+          neither finds. Newline-separated, resolved from the repo root.
+        type: string
+        default: ""
       targets:
         description: JSON array of build targets. chrome/firefox publish to stores; anything else is release-only.
         type: string
@@ -121,7 +141,7 @@ jobs:
     # tag: the forwarded 11.19.0 matched its bootstrap only by luck, and a
     # bootstrap bump upstream would have broken `tests` while `build` in this
     # same file stayed pinned and green.
-    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v7
+    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v8
     with:
       runner: ${{ inputs.runner }}
       # Forwarded so both jobs install the SAME pnpm. node-test.yml carries its
@@ -129,6 +149,8 @@ jobs:
       # different majors and run --frozen-lockfile against one lockfile from two
       # pnpm versions -- the exact split this input exists to close.
       pnpm-version: ${{ inputs.pnpm-version }}
+      package-manager-cache: ${{ inputs.package-manager-cache }}
+      cache-dependency-path: ${{ inputs.cache-dependency-path }}
 
   prepare:
     needs: tests
@@ -312,7 +334,7 @@ jobs:
   publish-chrome:
     needs: [prepare, build]
     if: contains(fromJSON(inputs.targets), 'chrome')
-    uses: dustfeather/shared-workflows/.github/workflows/publish-chrome.yml@v7
+    uses: dustfeather/shared-workflows/.github/workflows/publish-chrome.yml@v8
     with:
       runner: ${{ inputs.runner }}
       artifact-name: extensions-chrome
@@ -322,7 +344,7 @@ jobs:
   publish-firefox:
     needs: [prepare, build]
     if: contains(fromJSON(inputs.targets), 'firefox')
-    uses: dustfeather/shared-workflows/.github/workflows/publish-firefox.yml@v7
+    uses: dustfeather/shared-workflows/.github/workflows/publish-firefox.yml@v8
     with:
       runner: ${{ inputs.runner }}
       artifact-name: extensions-firefox

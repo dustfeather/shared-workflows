@@ -21,26 +21,24 @@ jobs:
       pull-requests: write
       issues: read
       id-token: write
-    # `@v7`, floating, matching pr-merge.yml. `@v6` is now FROZEN at v6.2.4
-    # (6c15ff7) — tag-release.yml re-points only the CURRENT major, so cutting
-    # v7 stranded v6 where it stood, exactly as the v5 cut had stranded v4
-    # before it. A pin left on a frozen major can never receive another change
-    # to claude-code-review.yml, and the staleness is invisible for as long as
-    # the file happens to match main.
+    # `@v8`, floating, matching pr-merge.yml. `@v7` is now FROZEN at v7.1.0 —
+    # tag-release.yml re-points only the CURRENT major, so cutting v8 stranded
+    # v7 where it stood, exactly as the v7 cut had stranded v6 at v6.2.4
+    # (6c15ff7) and the v6 cut had stranded v5. A pin left on a frozen major
+    # can never receive another change to claude-code-review.yml, and the
+    # staleness is invisible for as long as the file happens to match main.
     #
-    # Leaving it on `@v6` had a second cost specific to this cut: v7 exists
-    # because v7.0.0 defaulted pnpm to "12" and poisoned a shared store
-    # (ERR_PNPM_BROKEN_PNPM_INSTALL), and v7.0.1 is the fix. All 19 callers
-    # were moved to `@v7`; this repo staying behind made it the only one not
-    # running what it ships.
+    # Leaving it on `@v7` had a cost specific to this cut: v8 is the move off
+    # the ARC pools, so this repo staying behind would have made it the one
+    # caller still running its own reviews on a self-hosted runner while
+    # shipping `ubuntu-latest` to everyone else. No `runner:` any more for the
+    # same reason — the v8 default is the whole point.
     #
     # This bump cannot be shipped as a PR. `paths-ignore` above excludes this
     # very file, so a PR touching ONLY it starts no "PR checks" run at all —
     # no review, therefore no approval, therefore pr-merge.yml never fires and
     # the PR cannot land itself. Landed directly on main instead, as the `@v6`
-    # bump before it was.
-    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v7
-    with:
-      runner: arc-df-shared-workflows
+    # and `@v7` bumps before it were.
+    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v8
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
