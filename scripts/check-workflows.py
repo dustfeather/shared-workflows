@@ -548,6 +548,12 @@ def pnpm_pin_drift(files):
 # allow_rebase_merge belongs to the same rule: a rebase merge is replayed
 # server-side and arrives UNSIGNED, which is what moving to squash was for.
 # Leaving it enabled left that hole open on the path a human actually clicks.
+# The condition the job carrying CHECK_MERGE_SETTINGS must run under. Pinned
+# exactly rather than pattern-matched: the point is that a change to it is a
+# change to when the settings are read at all, so it should have to be made
+# here and in the fixtures as well as in the workflow.
+MERGE_SETTINGS_JOB_IF = "github.event_name == 'push'"
+
 MERGE_SETTINGS_EXPECTED = {
     "squash_merge_commit_title": "PR_TITLE",
     "allow_rebase_merge": False,
@@ -637,13 +643,74 @@ def merge_settings_drift(files):
                 if isinstance(step_env, dict) and str(
                     step_env.get("CHECK_MERGE_SETTINGS", "")
                 ) == "1":
-                    enabled.append(name)
+                    enabled.append((job_name, name))
                 if "MERGE_SETTINGS_SOFT" in env:
                     problems.append(
                         f"{gate_path}: the step {name!r} sets MERGE_SETTINGS_SOFT, "
                         f"which downgrades an unreadable settings response to a "
                         f"note. Only the pre-push hook may opt out."
                     )
+        # Where the flag is WRITTEN is not whether it is ever RUN. The step
+        # scoping above rejects an inherited flag and nothing else, so three
+        # ordinary edits would leave this function green while the leg reads
+        # nothing: swapping the job's `if:` to workflow_dispatch or adding a
+        # paths filter to on.push (pr-checks.yml carries one, so it reads as
+        # house style) -- silent, the job simply stops being reached on the
+        # merges that matter; and cutting `contents: write` back to the repo
+        # default as an obvious least-privilege tidy-up, which per the
+        # measurement above turns the three keys ABSENT and reds main on every
+        # push. The direct case matters most: moving the flag into the `guard`
+        # step's own env satisfies an exactly-one count while reddening the one
+        # required status check, which is the exact failure the separate job
+        # exists to prevent. The permission assertion is what catches it, not
+        # the placement one.
+        push = (on_block(gate_doc) or {}).get("push")
+        for job_name, step_name in enabled:
+            job = (gate_doc.get("jobs") or {}).get(job_name) or {}
+            perms = job.get("permissions")
+            contents = perms.get("contents") if isinstance(perms, dict) else None
+            if contents != "write":
+                problems.append(
+                    f"{gate_path}: the job {job_name!r} enables "
+                    f"CHECK_MERGE_SETTINGS on {step_name!r} but grants "
+                    f"`contents: {contents}` -- the three merge-setting keys "
+                    f"come back ABSENT to anything below `contents: write` "
+                    f"(measured 2026-09-22), so the leg can only report "
+                    f"'could not check' and fail on every run."
+                )
+            if str(job.get("if") or "") != MERGE_SETTINGS_JOB_IF:
+                problems.append(
+                    f"{gate_path}: the job {job_name!r} enables "
+                    f"CHECK_MERGE_SETTINGS under `if: {job.get('if')!r}` rather "
+                    f"than `if: {MERGE_SETTINGS_JOB_IF}`. The leg exists to catch "
+                    f"drift on the push that lands a merge, and a `pull_request` "
+                    f"run cannot read the fields at all. Changing the condition "
+                    f"deliberately means changing it here and in the fixtures too."
+                )
+            if not isinstance(push, dict):
+                problems.append(
+                    f"{gate_path}: the job {job_name!r} enables "
+                    f"CHECK_MERGE_SETTINGS but this workflow has no `on.push` "
+                    f"mapping, so the one event that reaches the leg never "
+                    f"fires it."
+                )
+                continue
+            for key in ("paths", "paths-ignore"):
+                if key in push:
+                    problems.append(
+                        f"{gate_path}: `on.push.{key}` filters the event that "
+                        f"reaches {job_name!r}, which enables "
+                        f"CHECK_MERGE_SETTINGS. A merge touching no matching "
+                        f"path would then land with the merge settings "
+                        f"unread, and nothing would say so."
+                    )
+            branches = push.get("branches")
+            if isinstance(branches, list) and "main" not in branches:
+                problems.append(
+                    f"{gate_path}: `on.push.branches` is {branches!r}, which "
+                    f"excludes main -- the branch whose merges cut the "
+                    f"releases {job_name!r} checks the settings for."
+                )
         if not enabled:
             problems.append(
                 f"{gate_path}: no step runs check-workflows.py with "

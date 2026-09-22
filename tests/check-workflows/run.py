@@ -518,25 +518,49 @@ GOOD_SETTINGS = {
 }
 
 
-def merge_gate(check="1", soft=None, *, top_env=None, job_env=None):
-    """guard-tests.yml as merge_settings_drift() reads it: one step running the
-    script, carrying (or not) the two variables this leg is gated on."""
+PUSH_IF = "github.event_name == 'push'"
+
+
+def settings_job(name="settings", *, check="1", soft=None, job_if=PUSH_IF,
+                 contents="write", job_env=None):
+    """A job as the shipped `settings` one is written: gated to push, scoped to
+    read the settings, with the flag on the step's OWN env. Every part is
+    overridable because every part is separately assertable."""
     env = []
     if check is not None:
         env.append(("CHECK_MERGE_SETTINGS", check))
     if soft is not None:
         env.append(("MERGE_SETTINGS_SOFT", soft))
-    out = ["on:", "  push:"]
-    if top_env:
-        out += ["env:"] + [f'  {k}: "{v}"' for k, v in top_env.items()]
-    out += ["jobs:", "  guard:", "    runs-on: ubuntu-latest"]
+    out = [f"  {name}:"]
+    if job_if is not None:
+        out += [f"    if: {job_if}"]
+    out += ["    runs-on: ubuntu-latest"]
+    if contents is not None:
+        out += ["    permissions:", f"      contents: {contents}"]
     if job_env:
         out += ["    env:"] + [f'      {k}: "{v}"' for k, v in job_env.items()]
-    out += ["    steps:", "      - name: static checks"]
+    out += ["    steps:", f"      - name: {name} step"]
     if env:
         out += ["        env:"] + [f'          {k}: "{v}"' for k, v in env]
     out += ["        run: python3 scripts/check-workflows.py"]
     return "\n".join(out) + "\n"
+
+
+def merge_gate(check="1", soft=None, *, top_env=None, job_env=None,
+               job_if=PUSH_IF, contents="write", push=("  push:",
+                                                       "    branches: [main]"),
+               jobs=None):
+    """guard-tests.yml as merge_settings_drift() reads it: the trigger that
+    reaches the leg, plus one step running the script and carrying (or not) the
+    two variables this leg is gated on."""
+    out = ["on:", *push]
+    if top_env:
+        out += ["env:"] + [f'  {k}: "{v}"' for k, v in top_env.items()]
+    out += ["jobs:"]
+    body = jobs if jobs is not None else settings_job(
+        check=check, soft=soft, job_if=job_if, contents=contents,
+        job_env=job_env)
+    return "\n".join(out) + "\n" + body
 
 
 def merge_case(name, expect, *, settings=GOOD_SETTINGS, env=None, gate_yaml=None,
@@ -623,29 +647,15 @@ merge_case("the gate taking the opt-out is a finding", "sets MERGE_SETTINGS_SOFT
 # carrying the flag. Requiring it on EVERY step would report this as broken,
 # which is how the check would have forced itself onto the required job.
 merge_case("a second script step without the flag is not a finding", None,
-           gate_yaml=merge_gate(check=None) + "\n".join([
-               "  settings:",
-               "    runs-on: ubuntu-latest",
-               "    steps:",
-               "      - name: settings",
-               "        env:",
-               '          CHECK_MERGE_SETTINGS: "1"',
-               "        run: python3 scripts/check-workflows.py",
-           ]) + "\n")
+           gate_yaml=merge_gate(jobs=settings_job(
+               "guard", check=None, job_if=None, contents=None) + settings_job()))
 # ...and the opt-out is still refused wherever it sits, including on that
 # second step, so "put it on the other one" is not a way round it.
 merge_case("the opt-out on the SECOND step is still a finding",
            "sets MERGE_SETTINGS_SOFT",
-           gate_yaml=merge_gate(check=None) + "\n".join([
-               "  settings:",
-               "    runs-on: ubuntu-latest",
-               "    steps:",
-               "      - name: settings",
-               "        env:",
-               '          CHECK_MERGE_SETTINGS: "1"',
-               '          MERGE_SETTINGS_SOFT: "1"',
-               "        run: python3 scripts/check-workflows.py",
-           ]) + "\n")
+           gate_yaml=merge_gate(jobs=settings_job(
+               "guard", check=None, job_if=None, contents=None)
+               + settings_job(soft="1")))
 # A step that only MENTIONS the script is not a step that runs it -- the same
 # trap the pnpm gate assertion has a case for.
 # Scope matters, not just presence. A workflow- or job-level flag reaches EVERY
@@ -657,7 +667,7 @@ merge_case("the opt-out on the SECOND step is still a finding",
 merge_case("a workflow-level flag is a finding", "set at workflow level",
            gate_yaml=merge_gate(check=None,
                                 top_env={"CHECK_MERGE_SETTINGS": "1"}))
-merge_case("a job-level flag is a finding", "set at job level on 'guard'",
+merge_case("a job-level flag is a finding", "set at job level on 'settings'",
            gate_yaml=merge_gate(check=None,
                                 job_env={"CHECK_MERGE_SETTINGS": "1"}))
 # ...and inheriting it does NOT satisfy the exactly-one requirement either, or
@@ -669,6 +679,43 @@ merge_case("an inherited flag does not count as enabling the leg",
 # The gate file itself gone. pnpm_pin_drift reports this too, so today the repo
 # would not be blind -- but borrowed coverage vanishes when the lender is
 # refactored.
+# Where the flag is WRITTEN is not whether it is ever RUN. The placement rule
+# above rejects an inherited flag and says nothing about the job's reachability
+# or its scope, so these pin the three properties that make the flag do
+# anything. The first is the one the whole separate-job design exists for: the
+# flag on the required `guard` job's own step passes an exactly-one count.
+merge_case("the flag on the required job's own step is a finding",
+           "grants `contents: None`",
+           gate_yaml=merge_gate(jobs=settings_job(
+               "guard", job_if=None, contents=None)))
+merge_case("contents: read on the enabling job is a finding",
+           "come back ABSENT", gate_yaml=merge_gate(contents="read"))
+merge_case("the enabling job with no permissions block is a finding",
+           "come back ABSENT", gate_yaml=merge_gate(contents=None))
+# Silent, unlike the two above: the job simply stops being reached, while the
+# placement assertion stays green and nothing goes red anywhere.
+merge_case("the enabling job moved off the push event is a finding",
+           "rather than `if: github.event_name == 'push'`",
+           gate_yaml=merge_gate(job_if="github.event_name == 'workflow_dispatch'"))
+merge_case("the enabling job with no condition at all is a finding",
+           "rather than `if: github.event_name == 'push'`",
+           gate_yaml=merge_gate(job_if=None))
+# pr-checks.yml carries a paths-ignore, so adding one here reads as house style.
+merge_case("a paths filter on the push trigger is a finding",
+           "`on.push.paths` filters the event",
+           gate_yaml=merge_gate(push=("  push:", "    paths: ['**.yml']")))
+merge_case("a paths-ignore filter on the push trigger is a finding",
+           "`on.push.paths-ignore` filters the event",
+           gate_yaml=merge_gate(push=("  push:", "    paths-ignore: ['docs/**']")))
+merge_case("no push trigger at all is a finding", "no `on.push` mapping",
+           gate_yaml=merge_gate(push=("  pull_request:",)))
+merge_case("a push trigger that excludes main is a finding", "excludes main",
+           gate_yaml=merge_gate(push=("  push:", "    branches: [release]")))
+# ...and the negative control for all of the above: a job WITHOUT the flag is
+# held to none of it, or the rule would force the leg onto every job.
+merge_case("a flagless job is not held to the scope or the condition", None,
+           gate_yaml=merge_gate(jobs=settings_job(
+               "guard", check=None, job_if=None, contents=None) + settings_job()))
 merge_case("guard-tests.yml absent entirely is a finding",
            "guard-tests.yml is missing", no_gate=True)
 merge_case("a mention of the script does not count as enabling the leg",
