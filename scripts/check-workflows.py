@@ -623,8 +623,24 @@ def arc_runner_defaults(files):
         if not isinstance(trigger, dict):
             continue
         call = trigger.get("workflow_call") or {}
-        runner = ((call.get("inputs") or {}).get("runner") or {})
+        inputs = call.get("inputs") or {}
+        # Absent is not the same as present-without-a-default, and conflating
+        # them reported six workflows that declare no `runner` input at all.
+        if "runner" not in inputs:
+            continue
+        runner = inputs.get("runner") or {}
         if "default" not in runner:
+            # A `runner` input with no default at all is invisible to both
+            # branches below, and it is not hypothetical: release-extension.yml
+            # shipped `required: true` until v8. Every caller then has to name
+            # a label, which in this account means an ARC one -- the v8 default
+            # reaching nobody, without a single `arc-` string to match on.
+            problems.append(
+                f"{path}: declares a `runner` input with no default. Since v8 "
+                f"every one defaults to a hosted label; without a default each "
+                f"caller must name a pool, which is the pre-v8 fleet wearing a "
+                f"different spelling. Give it `default: \"ubuntu-latest\"`."
+            )
             continue
         default = str(runner["default"])
         cluster = name in CLUSTER_WORKFLOWS

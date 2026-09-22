@@ -467,6 +467,39 @@ arc_case("deploy-helm keeps its pool", "deploy-helm.yml", "arc-df-shared-workflo
 arc_case("a cluster workflow moved to hosted is a finding", "deploy-k8s.yml",
          "ubuntu-latest", "is a cluster workflow")
 arc_case("no runner input at all: nothing to assert", "tag-release.yml", None, None)
+
+
+def arc_nodefault_case(name, fname, expect):
+    """A `runner` input that exists but declares no default -- what
+    release-extension.yml shipped until v8, and the shape with no `arc-`
+    string for either branch above to match on."""
+    global passed, failed
+    body = "\n".join([
+        "on:", "  workflow_call:", "    inputs:", "      runner:",
+        "        type: string", "        required: true",
+        "jobs:", "  a:", "    runs-on: ubuntu-latest", "    steps:",
+        "      - run: true",
+    ]) + "\n"
+    with tempfile.TemporaryDirectory() as d:
+        p = pathlib.Path(d) / fname
+        p.write_text(body)
+        problems = cw.arc_runner_defaults([str(p)])
+    joined = " | ".join(problems)
+    ok = (not problems) if expect is None else (expect in joined)
+    if ok:
+        print(f"PASS  {name}")
+        passed += 1
+    else:
+        print(f"FAIL  {name}\n      expected: {expect!r}\n      got: {joined or '(no findings)'}")
+        failed += 1
+
+
+arc_nodefault_case("required: true with no default is a finding", "a.yml",
+                   "declares a `runner` input with no default")
+# Absent is not the same as present-without-a-default: six of this repo's own
+# workflows declare no `runner` input, and conflating the two reported every
+# one of them.
+arc_case("a workflow with no workflow_call trigger is quiet", "tag-release.yml", None, None)
 # A self-hosted label that is not an ARC scale set is out of scope on purpose:
 # the check asserts the fleet default, not a taxonomy of labels.
 arc_case("an unrelated label is not matched", "a.yml", "macos-14", None)

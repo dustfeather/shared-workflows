@@ -50,6 +50,29 @@ trap 'rm -rf "$tmp"' EXIT
 
 for f in "${SLICED[@]}"; do
   bash tests/cachedeps/extract.sh "$f" > "$tmp/$(basename "$f").sh" || exit 1
+  # The step's env: keys live OUTSIDE the markers, so a slice on its own does
+  # not record which variable it may read. Exporting both names to every slice
+  # would make the copies agree on a mistake instead of catching it: paste
+  # deploy-cloudflare's slice into node-test.yml and `${INSTALL:-.}` silently
+  # reads "." for every working-dir, because that expansion does not trip
+  # `set -u`. In production that emits root-only globs and a caller whose
+  # lockfile sits under working-dir gets setup-node's hard failure -- and only
+  # that caller, so the default shape stays green. Derived per slice, like the
+  # file set.
+  bash tests/cachedeps/extract.sh --env-keys "$f" > "$tmp/$(basename "$f").env" || exit 1
+  dirvar=$(grep -v '^OVERRIDE$' "$tmp/$(basename "$f").env")
+  if [ "$(printf '%s' "$dirvar" | wc -l)" -ne 0 ] || [ -z "$dirvar" ]; then
+    echo "cachedeps: $f's cachedeps step must declare OVERRIDE plus exactly one" >&2
+    echo "directory variable; it declares: $(tr '\n' ' ' < "$tmp/$(basename "$f").env")" >&2
+    exit 1
+  fi
+  # A slice that never mentions its own variable cannot be reading it.
+  if ! grep -q "$dirvar" "$tmp/$(basename "$f").sh"; then
+    echo "cachedeps: $f declares \$$dirvar but its slice never references it." >&2
+    echo "Most likely the slice was pasted from the other workflow, which is" >&2
+    echo "silent in production: \${OTHER:-.} does not trip set -u." >&2
+    exit 1
+  fi
 done
 
 passed=0
@@ -60,10 +83,16 @@ failed=0
 derive() {
   local dir=$1 override=$2 first="" out=""
   for f in "${SLICED[@]}"; do
-    local gh="$tmp/out"
+    local gh="$tmp/out" base
+    base=$(basename "$f")
     : > "$gh"
-    GITHUB_OUTPUT="$gh" WORKING_DIR="$dir" INSTALL="$dir" OVERRIDE="$override" \
-      bash "$tmp/$(basename "$f").sh" || { echo "SLICE-FAILED:$f"; return 1; }
+    # ONLY this slice's own directory variable is exported. The other name is
+    # absent, so a slice reading it falls back to "." and fails the very first
+    # case instead of agreeing with its sibling on the wrong answer.
+    local var
+    var=$(grep -v '^OVERRIDE$' "$tmp/$base.env")
+    GITHUB_OUTPUT="$gh" OVERRIDE="$override" \
+      env "$var=$dir" bash "$tmp/$base.sh" || { echo "SLICE-FAILED:$f"; return 1; }
     out=$(cat "$gh")
     if [ -z "$first" ]; then
       first=$out
