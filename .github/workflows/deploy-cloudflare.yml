@@ -518,12 +518,12 @@ jobs:
 
       # `cache:` follows the runner, which defaults to `ubuntu-latest` since
       # v8 — a fresh store every job, so the restore is the only thing standing
-      # between this and a cold install. It is deliberately keyed off the
-      # detected package manager rather than exposed as an input: unlike
-      # node-test.yml this workflow has one job, so there is no second caller
-      # shape to serve. On an ARC pool the restore round-trips that pool's
-      # persistent node-local store through the in-cluster cache service for
-      # nothing; that is the cost of the shared default, and it is seconds.
+      # between this and a cold install. On an ARC pool it is the opposite: the
+      # restore round-trips that pool's persistent node-local store through the
+      # in-cluster cache service for nothing, which is why `package-manager-cache`
+      # exists and why a caller still pinned to a pool should pass `false`. The
+      # input mirrors node-test.yml's deliberately — a deploy is the last path
+      # that should be the one with no way out.
       # setup-node accepts npm/yarn/pnpm but not bun, so bun passes '' (which
       # disables caching) exactly as node-test.yml does.
       - uses: actions/setup-node@v7

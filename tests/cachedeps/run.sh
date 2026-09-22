@@ -21,6 +21,18 @@ mapfile -t SLICED < <(grep -l "cachedeps-slice-begin" .github/workflows/*.yml | 
 # guard-tests.yml carries exactly that in a comment -- which would report a
 # copy that does not exist and make this check impossible to satisfy.
 mapfile -t STEPPED < <(grep -lE "^[[:space:]]*id: cachedeps[[:space:]]*$" .github/workflows/*.yml | sort)
+# Both sets empty compares equal, so the set check alone passes over nothing:
+# rename the markers and the step id in one tidy-up pass and this suite goes
+# green having exercised zero cases, in the pre-push hook and in the one
+# required check on main. tests/pnpm-guard/extract.sh refuses on the same
+# shape; extract.sh cannot help here because it is only called per file from
+# the set that is empty.
+if [ "${#SLICED[@]}" -eq 0 ]; then
+  echo "cachedeps: no workflow carries cachedeps-slice markers; refusing to test nothing." >&2
+  echo "Either the markers were renamed or the block is gone. Restore them --" >&2
+  echo "passing over an empty set is not a pass." >&2
+  exit 1
+fi
 if [ "${SLICED[*]}" != "${STEPPED[*]}" ]; then
   echo "cachedeps: the marked set and the cachedeps-step set disagree." >&2
   echo "  markers: ${SLICED[*]:-none}" >&2
@@ -65,7 +77,11 @@ derive() {
 
 check() {
   local name=$1 dir=$2 override=$3 expect=$4 got
-  got=$(derive "$dir" "$override")
+  if ! got=$(derive "$dir" "$override"); then
+    echo "FAIL  $name  ($got)"
+    failed=$((failed + 1))
+    return
+  fi
   if [ "$got" = "$expect" ]; then
     echo "PASS  $name"
     passed=$((passed + 1))
@@ -82,7 +98,16 @@ check() {
 # off Cargo.lock.
 refute() {
   local name=$1 dir=$2 override=$3 needle=$4 got
-  got=$(derive "$dir" "$override")
+  # The status matters more here than in check(): an absence assertion is
+  # satisfied by ANY output that lacks the needle, and derive's failure strings
+  # ("SLICE-FAILED:<f>", "DRIFT:<f>") contain neither `*lock*` nor `Cargo`, so
+  # a broken slice would report PASS on all three. Assert the status alongside
+  # the text, never the text alone -- the rule the pnpm guard already carries.
+  if ! got=$(derive "$dir" "$override"); then
+    echo "FAIL  $name  ($got)"
+    failed=$((failed + 1))
+    return
+  fi
   if [[ "$got" != *"$needle"* ]]; then
     echo "PASS  $name"
     passed=$((passed + 1))
@@ -140,4 +165,10 @@ refute "Cargo.lock cannot satisfy the lookup"         "app"    "" "Cargo"
 
 echo
 echo "cachedeps: $passed passed, $failed failed"
+# A floor, not a formality: "0 passed, 0 failed" is what every way of losing
+# the cases looks like, and it exits 0 on both counts without it.
+if [ "$passed" -eq 0 ]; then
+  echo "cachedeps: no case ran; that is a failure, not a pass." >&2
+  exit 1
+fi
 [ "$failed" -eq 0 ]
