@@ -68,7 +68,7 @@ jobs:
     if: >-
       github.event_name == 'push' ||
       github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-latest
+    runs-on: arc-df-shared-workflows
     steps:
       - uses: actions/checkout@v7
         with:

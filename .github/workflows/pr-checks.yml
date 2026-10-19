@@ -43,5 +43,7 @@ jobs:
     # the PR cannot land itself. Landed directly on main instead, as the `@v6`
     # and `@v7` bumps before it were.
     uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v8
+    with:
+      runner: arc-df-shared-workflows
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

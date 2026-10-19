@@ -30,7 +30,7 @@ concurrency:
 
 jobs:
   guard:
-    runs-on: ubuntu-latest
+    runs-on: arc-df-shared-workflows
     steps:
       - uses: actions/checkout@v7
       - name: Extract the guard from the YAML and run both suites
@@ -178,7 +178,7 @@ jobs:
   # a result, which is a few extra contents-API calls on pushes to main only.
   settings:
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: arc-df-shared-workflows
     permissions:
       contents: write
     steps:
