@@ -120,7 +120,9 @@ ENV FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true
 # Pinning it here makes setup-node consult the image-baked Node below.
 ENV RUNNER_TOOL_CACHE=/opt/hostedtoolcache
 
-# System packages: jq for the CodeQL gate's response parsing, gh for the
+# System packages: shellcheck + python3-yaml for guard-tests.yml (actionlint
+# silently skips its shell checks without shellcheck; PEP 668 blocks the
+# pip fallback there), jq for the CodeQL gate's response parsing, gh for the
 # review tools the action invokes, plus the usual curl/ca-certificates
 # bootstrap. NodeSource provides a recent Node runtime so the global npm
 # install of @anthropic-ai/claude-code works. python3 + pip are added for
@@ -137,8 +139,8 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         ca-certificates curl gnupg jq zip unzip \
-        libatomic1 \
-        python3 python3-pip; \
+        libatomic1 shellcheck \
+        python3 python3-pip python3-yaml; \
     install -m 0755 -d /etc/apt/keyrings; \
     curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
         -o /etc/apt/keyrings/githubcli-archive-keyring.gpg; \
