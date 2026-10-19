@@ -1,0 +1,6 @@
+# Self-hosted ARC scale-set labels this repo's own workflows run on
+# (ITGuys-RO/k3s-cluster bootstrap/arc-runner-sets.sh). Without this,
+# actionlint rejects every `runs-on: arc-*` as an unknown label.
+self-hosted-runner:
+  labels:
+    - arc-df-shared-workflows
