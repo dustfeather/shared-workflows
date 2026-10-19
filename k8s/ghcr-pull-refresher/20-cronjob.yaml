@@ -31,7 +31,7 @@ spec:
           # reach CoreDNS on `asus-laptop`. Co-scheduling with the
           # runners also keeps the credential lifecycle on the same box.
           nodeSelector:
-            kubernetes.io/hostname: acer-laptop
+            kubernetes.io/hostname: wsl
           # Same toleration as the runner pods so the refresher can land
           # on the same node pool. `ephemeral=true:NoSchedule` is the
           # arc-runners convention; harmless if no nodes have it.

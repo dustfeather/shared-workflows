@@ -26,7 +26,7 @@ spec:
       # Pin to the runner node — see CronJob comment. Bootstrap on the
       # wrong node hits the WSL2 cross-node networking bug.
       nodeSelector:
-        kubernetes.io/hostname: acer-laptop
+        kubernetes.io/hostname: wsl
       tolerations:
         - effect: NoSchedule
           key: ephemeral
