@@ -120,7 +120,10 @@ ENV FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true
 # Pinning it here makes setup-node consult the image-baked Node below.
 ENV RUNNER_TOOL_CACHE=/opt/hostedtoolcache
 
-# System packages: shellcheck + python3-yaml for guard-tests.yml (actionlint
+# System packages: build-essential + pkg-config + libssl-dev because
+# ubuntu-latest ships a C toolchain and jobs moved from it assume one
+# (advisory-db `cargo install` died with `failed to find tool "cc"`; node-gyp
+# native addons hit the same wall). shellcheck + python3-yaml for guard-tests.yml (actionlint
 # silently skips its shell checks without shellcheck; PEP 668 blocks the
 # pip fallback there), jq for the CodeQL gate's response parsing, gh for the
 # review tools the action invokes, plus the usual curl/ca-certificates
@@ -140,6 +143,7 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends \
         ca-certificates curl gnupg jq zip unzip \
         libatomic1 shellcheck \
+        build-essential pkg-config libssl-dev \
         python3 python3-pip python3-yaml; \
     install -m 0755 -d /etc/apt/keyrings; \
     curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
