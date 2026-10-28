@@ -156,7 +156,9 @@ on:
       max-startup-ms:
         description: |
           Fail the job if wrangler reports a startup time above this many ms.
-          0 (the default) disables the gate.
+          0 (the default) disables the gate. The reading itself is taken on
+          every deploy either way: it is the `startup-ms` output and a line in
+          the job summary, so a ceiling can be sized from measured values.
 
           This gate necessarily runs AFTER the deploy: startup time is measured
           by the upload itself and is not reported by `--dry-run`. So it does
@@ -332,6 +334,16 @@ on:
           `CF-Access-Client-Secret` header. Both halves must be present or
           neither is sent.
         required: false
+    outputs:
+      startup-ms:
+        description: |
+          Worker startup time in ms, as wrangler reported it on the upload.
+          Measured on every deploy, whether or not `max-startup-ms` sets a
+          ceiling, so a caller can record the series and size its ceiling from
+          it. Empty when wrangler printed no reading, when the deploy or an
+          earlier post-deploy check (the secrets check) did not succeed, and
+          always under `dry-run` (only the upload measures it).
+        value: ${{ jobs.deploy.outputs.startup-ms }}
 
 permissions:
   contents: read
@@ -343,6 +355,8 @@ jobs:
     environment: ${{ inputs.environment }}
     permissions:
       contents: read
+    outputs:
+      startup-ms: ${{ steps.startup.outputs.ms }}
     env:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -753,8 +767,13 @@ jobs:
           fi
           echo "All staged secrets present on the Worker: $WORKER_SECRET_NAMES"
 
-      - if: ${{ !inputs.dry-run && inputs.max-startup-ms > 0 }}
-        name: Startup time gate
+      # Runs on every deploy, ceiling or not: the reading is a workflow output
+      # (`startup-ms`) and a Summary line, and only the comparison needs
+      # `max-startup-ms`. The output is written BEFORE the comparison, so a
+      # breached gate still reports the number that breached it.
+      - if: ${{ !inputs.dry-run }}
+        name: Startup time
+        id: startup
         working-directory: ${{ inputs.working-dir }}
         env:
           MAX_STARTUP_MS: ${{ inputs.max-startup-ms }}
@@ -763,15 +782,26 @@ jobs:
           startup_ms="$(sed 's/\x1b\[[0-9;]*m//g' deploy.log \
             | grep -oiE 'startup time:[[:space:]]*[0-9]+[[:space:]]*ms' \
             | tail -1 | grep -oE '[0-9]+' || true)"
+          echo "ms=${startup_ms}" >> "$GITHUB_OUTPUT"
 
           if [ -z "$startup_ms" ]; then
             # Not every wrangler version prints this on every deploy. A missing
             # measurement is not a breach, so warn rather than fail — but say so,
             # because a gate that quietly stopped measuring is worse than none.
-            echo "::warning::wrangler reported no startup time; the ${MAX_STARTUP_MS} ms gate did not run"
+            # With no ceiling set there is no gate to have stopped, so a plain
+            # line rather than an annotation on every such caller's run.
+            if [ "$MAX_STARTUP_MS" -gt 0 ]; then
+              echo "::warning::wrangler reported no startup time; the ${MAX_STARTUP_MS} ms gate did not run"
+            else
+              echo "wrangler reported no startup time"
+            fi
             exit 0
           fi
 
+          if [ "$MAX_STARTUP_MS" -le 0 ]; then
+            echo "Worker startup: ${startup_ms} ms (no ceiling set)"
+            exit 0
+          fi
           echo "Worker startup: ${startup_ms} ms (ceiling ${MAX_STARTUP_MS} ms)"
           if [ "$startup_ms" -gt "$MAX_STARTUP_MS" ]; then
             echo "::error::Startup time ${startup_ms} ms is over the ${MAX_STARTUP_MS} ms budget. The hard limit is 1000 ms, past which deploys fail with 10021 Script startup exceeded CPU time limit. This version IS already live — the gate runs after upload because only the upload measures startup."
@@ -946,6 +976,9 @@ jobs:
           DRY_RUN: ${{ inputs.dry-run }}
           DEPLOY_COMMAND: ${{ inputs.deploy-command }}
           DRY_RUN_COMMAND: ${{ inputs.dry-run-command }}
+          STARTUP_OUTCOME: ${{ steps.startup.outcome }}
+          STARTUP_MS: ${{ steps.startup.outputs.ms }}
+          MAX_STARTUP_MS: ${{ inputs.max-startup-ms }}
         run: |
           set -eu
           {
@@ -958,6 +991,19 @@ jobs:
               echo "### Cloudflare deploy — \`${WORKING_DIR}\`"
             fi
             [ -n "${bundle_gzip_kib:-}" ] && echo "- bundle: ${bundle_gzip_kib} KiB gzip"
+            # Keyed on whether the step RAN, not on the value: skipped (dry run,
+            # or an earlier step failed) says nothing, while a step that ran and
+            # found no reading says so — a gate that quietly stopped measuring
+            # reads as a pass otherwise.
+            if [ "$STARTUP_OUTCOME" = "success" ] || [ "$STARTUP_OUTCOME" = "failure" ]; then
+              if [ -z "$STARTUP_MS" ]; then
+                echo "- startup: not reported by wrangler"
+              elif [ "$MAX_STARTUP_MS" -gt 0 ]; then
+                echo "- startup: ${STARTUP_MS} ms (ceiling ${MAX_STARTUP_MS} ms)"
+              else
+                echo "- startup: ${STARTUP_MS} ms (no ceiling set)"
+              fi
+            fi
             [ -n "${EXPECT_CRONS:-}" ] && [ "$DRY_RUN" != "true" ] && echo "- cron triggers asserted: \`${EXPECT_CRONS}\`"
             # Name the command in both modes. A dry run's entire output is one
             # number, and `dry-run-command` is overridable and NOT derived from

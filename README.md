@@ -217,6 +217,20 @@ hard 1 s ceiling and deploys start dying with
 `10021 Script startup exceeded CPU time limit`. Both gates default to `0`,
 which disables them.
 
+The startup reading is taken on every deploy, ceiling or not, and exposed as
+the `startup-ms` workflow output (empty when wrangler printed none) plus a
+line in the job summary. Collect it from the caller to size the ceiling from
+measured values rather than a guess:
+
+```yaml
+  record:
+    needs: deploy-api
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "api startup ${{ needs.deploy-api.outputs.startup-ms }} ms"
+```
+
 `verify-url` polls the deployed Worker until it answers 2xx (12 attempts, 5 s
 apart by default). Skipping it is allowed and is a choice to deploy without
 checking.
