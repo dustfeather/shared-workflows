@@ -430,13 +430,16 @@ image_case("an unquoted workflow literal still matches",
 # --- arc_runner_defaults() -----------------------------------------------
 # Third harness because the exception list is keyed on the BASENAME, so a case
 # is a filename plus a default, and the fixture has to control both.
-def arc_case(name, fname, default, expect):
-    """default: the `runner` input's default, or None to omit the input."""
+def arc_case(name, fname, default, expect, required=None):
+    """default: the `runner` input's default, or None to omit the input.
+    required: a `required:` value to declare beside it, or None for none."""
     global passed, failed
     out = ["on:", "  workflow_call:"]
     if default is not None:
         out += ["    inputs:", "      runner:", "        type: string",
                 f'        default: "{default}"']
+        if required is not None:
+            out += [f"        required: {str(required).lower()}"]
     out += ["jobs:", "  a:", "    runs-on: ubuntu-latest", "    steps:",
             "      - run: true"]
     with tempfile.TemporaryDirectory() as d:
@@ -459,24 +462,31 @@ arc_case("hosted default on an ordinary workflow", "node-test.yml", "ubuntu-late
 # pool.
 arc_case("an arc-* default anywhere else is a finding", "new-thing.yml",
          "arc-df-shared-workflows", "Since v8 every runner default is a hosted label")
-arc_case("deploy-k8s keeps its pool", "deploy-k8s.yml", "arc-df-shared-workflows", None)
-arc_case("deploy-helm keeps its pool", "deploy-helm.yml", "arc-df-shared-workflows", None)
+# Since v9 a cluster workflow takes NO default (#59): a pool label is bound to
+# one repo, so a default queues forever in every other caller.
+arc_case("a pool default on a cluster workflow is a finding", "deploy-k8s.yml",
+         "arc-df-shared-workflows", "defaults to 'arc-df-shared-workflows'")
+# required alone does not excuse a default: the two conditions are separate.
+arc_case("required: true beside a default is still a finding", "deploy-helm.yml",
+         "arc-df-shared-workflows", "defaults to 'arc-df-shared-workflows'",
+         required=True)
 # The same mistake from the other side: "tidying" a cluster workflow onto the
 # hosted default costs nothing here and fails at deploy time, against an
 # RFC1918 address with no token.
 arc_case("a cluster workflow moved to hosted is a finding", "deploy-k8s.yml",
-         "ubuntu-latest", "is a cluster workflow")
+         "ubuntu-latest", "defaults to 'ubuntu-latest'")
 arc_case("no runner input at all: nothing to assert", "tag-release.yml", None, None)
 
 
-def arc_nodefault_case(name, fname, expect):
+def arc_nodefault_case(name, fname, expect, required=True):
     """A `runner` input that exists but declares no default -- what
     release-extension.yml shipped until v8, and the shape with no `arc-`
-    string for either branch above to match on."""
+    string for either branch above to match on. required=None omits the key."""
     global passed, failed
+    req = [] if required is None else [f"        required: {str(required).lower()}"]
     body = "\n".join([
         "on:", "  workflow_call:", "    inputs:", "      runner:",
-        "        type: string", "        required: true",
+        "        type: string", *req,
         "jobs:", "  a:", "    runs-on: ubuntu-latest", "    steps:",
         "      - run: true",
     ]) + "\n"
@@ -496,6 +506,14 @@ def arc_nodefault_case(name, fname, expect):
 
 arc_nodefault_case("required: true with no default is a finding", "a.yml",
                    "declares a `runner` input with no default")
+# ...except on the two cluster workflows, where it is the required shape.
+arc_nodefault_case("deploy-k8s: required, no default", "deploy-k8s.yml", None)
+arc_nodefault_case("deploy-helm: required, no default", "deploy-helm.yml", None)
+# No default but not required: the omission would pass validation and queue.
+arc_nodefault_case("cluster: required: false is a finding", "deploy-k8s.yml",
+                   "is not `required: true`", required=False)
+arc_nodefault_case("cluster: no required key is a finding", "deploy-helm.yml",
+                   "is not `required: true`", required=None)
 # Absent is not the same as present-without-a-default: six of this repo's own
 # workflows declare no `runner` input, and conflating the two reported every
 # one of them.

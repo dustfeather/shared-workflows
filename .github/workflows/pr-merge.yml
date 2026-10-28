@@ -106,7 +106,7 @@ jobs:
     # (6c15ff7) just as the v5 cut had stranded v4 at v4.14.2. A pin left on
     # one of those does not silently inherit anything — it keeps that major's
     # behaviour for good.
-    uses: dustfeather/shared-workflows/.github/workflows/merge-on-approval.yml@v8
+    uses: dustfeather/shared-workflows/.github/workflows/merge-on-approval.yml@v9
     with:
       runner: arc-df-shared-workflows
       # `direct`, not the reusable workflow's `auto` default, because
