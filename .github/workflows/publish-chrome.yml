@@ -36,14 +36,15 @@ on:
         default: "ubuntu-latest"
       timeout-minutes:
         description: |
-          Job timeout. Without one the job inherits GitHub's 360-minute default,
-          and a caller cannot bound it from its side: `timeout-minutes` is not
-          a supported key on a job that `uses:` a reusable workflow. The
-          default IS that 360, so a caller passing nothing sees no change; a
-          caller whose concurrency group queues (`cancel-in-progress: false`)
-          should pass a real bound, or a hang holds the group for six hours.
+          Job timeout, set on every job this workflow runs. A caller cannot
+          bound a `uses:` job from its side (`timeout-minutes` is not a
+          supported key there), so without this a hang inherits GitHub's
+          360-minute default and, in a queued concurrency group, blocks every
+          later run for six hours. The default is a few times the slowest
+          successful run seen (under 2 minutes); raise it for a genuinely long job
+          rather than forking.
         type: number
-        default: 360
+        default: 30
     secrets:
       CHROME_CLIENT_ID:
         required: false

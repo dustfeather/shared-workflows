@@ -8,7 +8,7 @@
 #   concurrency: { group: release, cancel-in-progress: true }
 #   jobs:
 #     release:
-#       uses: dustfeather/shared-workflows/.github/workflows/release-extension.yml@v8
+#       uses: dustfeather/shared-workflows/.github/workflows/release-extension.yml@v9
 #       with:
 #         runner: arc-df-<repo>
 #         targets: '["chrome","firefox"]'   # discord-purge adds "userscript"
@@ -39,14 +39,15 @@ on:
         default: "ubuntu-latest"
       timeout-minutes:
         description: |
-          Job timeout. Without one the job inherits GitHub's 360-minute default,
-          and a caller cannot bound it from its side: `timeout-minutes` is not
-          a supported key on a job that `uses:` a reusable workflow. The
-          default IS that 360, so a caller passing nothing sees no change; a
-          caller whose concurrency group queues (`cancel-in-progress: false`)
-          should pass a real bound, or a hang holds the group for six hours.
+          Job timeout, set on every job this workflow runs. A caller cannot
+          bound a `uses:` job from its side (`timeout-minutes` is not a
+          supported key there), so without this a hang inherits GitHub's
+          360-minute default and, in a queued concurrency group, blocks every
+          later run for six hours. The default is a few times the slowest
+          successful run seen (about 4 minutes; also bounds its node-test call); raise it for a genuinely long job
+          rather than forking.
         type: number
-        default: 360
+        default: 60
       package-manager-cache:
         description: |
           Forwarded to node-test.yml's input of the same name, which defaults
@@ -151,7 +152,7 @@ jobs:
     # tag: the forwarded 11.19.0 matched its bootstrap only by luck, and a
     # bootstrap bump upstream would have broken `tests` while `build` in this
     # same file stayed pinned and green.
-    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v8
+    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v9
     with:
       runner: ${{ inputs.runner }}
       timeout-minutes: ${{ inputs.timeout-minutes }}
@@ -348,7 +349,7 @@ jobs:
   publish-chrome:
     needs: [prepare, build]
     if: contains(fromJSON(inputs.targets), 'chrome')
-    uses: dustfeather/shared-workflows/.github/workflows/publish-chrome.yml@v8
+    uses: dustfeather/shared-workflows/.github/workflows/publish-chrome.yml@v9
     with:
       runner: ${{ inputs.runner }}
       timeout-minutes: ${{ inputs.timeout-minutes }}
@@ -359,7 +360,7 @@ jobs:
   publish-firefox:
     needs: [prepare, build]
     if: contains(fromJSON(inputs.targets), 'firefox')
-    uses: dustfeather/shared-workflows/.github/workflows/publish-firefox.yml@v8
+    uses: dustfeather/shared-workflows/.github/workflows/publish-firefox.yml@v9
     with:
       runner: ${{ inputs.runner }}
       timeout-minutes: ${{ inputs.timeout-minutes }}

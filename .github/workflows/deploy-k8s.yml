@@ -78,29 +78,26 @@ on:
         default: ""
       runner:
         description: |
-          Self-hosted ARC scale-set label for the runner pool. Must be a scale
-          set inside the target cluster — auth is the runner pod's own
-          ServiceAccount, so a GitHub-hosted runner cannot reach the cluster.
-
-          THIS INPUT IS THE FLEET'S ONE EXCEPTION. Every other workflow here
-          defaults to `ubuntu-latest` as of v8; these two cannot, because
-          `k3s.itguys.ro` resolves to 192.168.1.5 — an RFC1918 address a
-          GitHub-hosted runner can never reach — and because the credential is
-          the runner pod's own mounted ServiceAccount token, which exists only
-          inside the cluster. The ARC scale sets stay deployed for this
-          workflow and deploy-helm.yml, and for nothing else.
+          Self-hosted ARC scale-set label. REQUIRED, with no default: this job
+          authenticates as the runner pod's own mounted ServiceAccount token
+          and talks to `k3s.itguys.ro` (192.168.1.5, RFC1918), so no
+          GitHub-hosted runner can do it, and each scale set is registered to
+          ONE repo, so no label is right for every caller. A wrong label does
+          not fail: the job queues forever with `runner_name: ""`. Required
+          makes an omission a startup_failure naming this input instead.
+        required: true
         type: string
-        default: "arc-df-shared-workflows"
       timeout-minutes:
         description: |
-          Job timeout. Without one the job inherits GitHub's 360-minute default,
-          and a caller cannot bound it from its side: `timeout-minutes` is not
-          a supported key on a job that `uses:` a reusable workflow. The
-          default IS that 360, so a caller passing nothing sees no change; a
-          caller whose concurrency group queues (`cancel-in-progress: false`)
-          should pass a real bound, or a hang holds the group for six hours.
+          Job timeout, set on every job this workflow runs. A caller cannot
+          bound a `uses:` job from its side (`timeout-minutes` is not a
+          supported key there), so without this a hang inherits GitHub's
+          360-minute default and, in a queued concurrency group, blocks every
+          later run for six hours. The default is a few times the slowest
+          successful run seen (about 2 minutes); raise it for a genuinely long job
+          rather than forking.
         type: number
-        default: 360
+        default: 30
 
       # --- tooling -------------------------------------------------------
       setup-kubectl:
