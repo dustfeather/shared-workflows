@@ -100,6 +100,16 @@ on:
           the old race against dockerd binding its socket does not apply.
         type: string
         default: "ubuntu-latest"
+      timeout-minutes:
+        description: |
+          Job timeout. Without one the job inherits GitHub's 360-minute default,
+          and a caller cannot bound it from its side: `timeout-minutes` is not
+          a supported key on a job that `uses:` a reusable workflow. The
+          default IS that 360, so a caller passing nothing sees no change; a
+          caller whose concurrency group queues (`cancel-in-progress: false`)
+          should pass a real bound, or a hang holds the group for six hours.
+        type: number
+        default: 360
     outputs:
       image:
         description: |
@@ -114,6 +124,7 @@ permissions:
 jobs:
   build:
     runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
     permissions:
       contents: read
       packages: write

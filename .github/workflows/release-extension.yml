@@ -37,6 +37,16 @@ on:
           name its own ARC scale set.
         type: string
         default: "ubuntu-latest"
+      timeout-minutes:
+        description: |
+          Job timeout. Without one the job inherits GitHub's 360-minute default,
+          and a caller cannot bound it from its side: `timeout-minutes` is not
+          a supported key on a job that `uses:` a reusable workflow. The
+          default IS that 360, so a caller passing nothing sees no change; a
+          caller whose concurrency group queues (`cancel-in-progress: false`)
+          should pass a real bound, or a hang holds the group for six hours.
+        type: number
+        default: 360
       package-manager-cache:
         description: |
           Forwarded to node-test.yml's input of the same name, which defaults
@@ -144,6 +154,7 @@ jobs:
     uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v8
     with:
       runner: ${{ inputs.runner }}
+      timeout-minutes: ${{ inputs.timeout-minutes }}
       # Forwarded so both jobs install the SAME pnpm. node-test.yml carries its
       # own default, so leaving this out would let `tests` and `build` resolve
       # different majors and run --frozen-lockfile against one lockfile from two
@@ -155,6 +166,7 @@ jobs:
   prepare:
     needs: tests
     runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
     permissions:
       contents: write
     outputs:
@@ -192,6 +204,7 @@ jobs:
   build:
     needs: prepare
     runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
     strategy:
       fail-fast: false
       matrix:
@@ -313,6 +326,7 @@ jobs:
   release:
     needs: [prepare, build]
     runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
     permissions:
       contents: write
     steps:
@@ -337,6 +351,7 @@ jobs:
     uses: dustfeather/shared-workflows/.github/workflows/publish-chrome.yml@v8
     with:
       runner: ${{ inputs.runner }}
+      timeout-minutes: ${{ inputs.timeout-minutes }}
       artifact-name: extensions-chrome
       zip-name: ${{ needs.prepare.outputs.base }}-chrome-${{ needs.prepare.outputs.tag }}.zip
     secrets: inherit
@@ -347,6 +362,7 @@ jobs:
     uses: dustfeather/shared-workflows/.github/workflows/publish-firefox.yml@v8
     with:
       runner: ${{ inputs.runner }}
+      timeout-minutes: ${{ inputs.timeout-minutes }}
       artifact-name: extensions-firefox
       xpi-name: ${{ needs.prepare.outputs.base }}-firefox-${{ needs.prepare.outputs.tag }}.xpi
       source-name: ${{ needs.prepare.outputs.base }}-source-${{ needs.prepare.outputs.tag }}.zip

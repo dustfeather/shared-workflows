@@ -91,6 +91,16 @@ on:
           workflow and deploy-helm.yml, and for nothing else.
         type: string
         default: "arc-df-shared-workflows"
+      timeout-minutes:
+        description: |
+          Job timeout. Without one the job inherits GitHub's 360-minute default,
+          and a caller cannot bound it from its side: `timeout-minutes` is not
+          a supported key on a job that `uses:` a reusable workflow. The
+          default IS that 360, so a caller passing nothing sees no change; a
+          caller whose concurrency group queues (`cancel-in-progress: false`)
+          should pass a real bound, or a hang holds the group for six hours.
+        type: number
+        default: 360
 
       # --- tooling -------------------------------------------------------
       setup-kubectl:
@@ -321,6 +331,7 @@ permissions:
 jobs:
   deploy:
     runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
     environment: ${{ inputs.environment }}
     # contents: read only. Requesting packages: write here would make every
     # caller that grants least privilege fail at validation — see the header.
