@@ -257,6 +257,19 @@ on:
           label keeps its pool, this repo's own shims included.
         type: string
         default: "ubuntu-latest"
+      timeout-minutes:
+        description: |
+          Job timeout. Without one the job inherits GitHub's 360-minute default,
+          and a caller cannot bound it from its side: `timeout-minutes` is not
+          a supported key on a job that `uses:` a reusable workflow. That is
+          invisible while the caller cancels superseded runs and load-bearing
+          the moment it queues them instead (`cancel-in-progress: false`), when
+          a wedged deploy holds the caller's concurrency group for six hours.
+          The default IS that 360, so a caller passing nothing sees no change;
+          a caller queueing its deploys should pass a real bound (observed
+          deploys finish in under 2 minutes, so 20 is generous).
+        type: number
+        default: 360
     secrets:
       NPM_TOKEN:
         description: |
@@ -328,6 +341,7 @@ permissions:
 jobs:
   deploy:
     runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
     environment: ${{ inputs.environment }}
     permissions:
       contents: read
