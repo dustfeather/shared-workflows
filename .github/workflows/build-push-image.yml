@@ -108,7 +108,7 @@ on:
           supported key there), so without this a hang inherits GitHub's
           360-minute default and, in a queued concurrency group, blocks every
           later run for six hours. The default is a few times the slowest
-          successful run seen (about 3 minutes, warm cache); raise it for a genuinely long job
+          successful run seen (about 5 minutes); raise it for a genuinely long job
           rather than forking.
         type: number
         default: 60
