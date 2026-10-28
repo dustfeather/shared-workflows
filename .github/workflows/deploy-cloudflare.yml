@@ -688,7 +688,38 @@ jobs:
           # command so that a caller overriding `deploy-command` (e.g. to run
           # `wrangler versions upload`) still gets its secrets. Both commands
           # accept the flag.
-          sh -c "$DEPLOY_COMMAND${WORKER_SECRETS_FILE:+ --secrets-file \"$WORKER_SECRETS_FILE\"}" 2>&1 | tee deploy.log
+          #
+          # Retried, up to twice more with a 20 s backoff, ONLY when wrangler
+          # reports a failed request to the `/zones` endpoint. That failure has
+          # been seen after `Uploaded <name>` while wrangler reconciles routes
+          # (`A request to the Cloudflare API (/zones) failed.`), passing on a
+          # plain rerun with no code change. The match is on the resource, not
+          # the prefix: wrangler prints `A request to the Cloudflare API (...)`
+          # for EVERY API error, auth 10000 and startup 10021 included, and
+          # those never pass on a rerun. Any other failure fails at once.
+          # Re-running the default `wrangler deploy` is idempotent (same script,
+          # same routes); a `deploy-command` override doing non-idempotent work
+          # before the deploy must not rely on this retry. Each attempt
+          # overwrites deploy.log, so the gates below read the one that passed.
+          attempt=1
+          max_attempts=3
+          while :; do
+            set +e
+            sh -c "$DEPLOY_COMMAND${WORKER_SECRETS_FILE:+ --secrets-file \"$WORKER_SECRETS_FILE\"}" 2>&1 | tee deploy.log
+            status="${PIPESTATUS[0]}"
+            set -e
+            [ "$status" -eq 0 ] && break
+            # Not `grep -q`: it exits on the first match, sed takes SIGPIPE,
+            # and pipefail would read that 141 as "no match".
+            if [ "$attempt" -ge "$max_attempts" ] \
+              || ! sed 's/\x1b\[[0-9;]*m//g' deploy.log \
+                | grep -F 'A request to the Cloudflare API (/zones' >/dev/null; then
+              exit "$status"
+            fi
+            echo "::warning::Deploy attempt ${attempt}/${max_attempts} hit a transient Cloudflare API error; retrying in 20 s"
+            sleep 20
+            attempt=$((attempt + 1))
+          done
 
       - if: always() && env.WORKER_SECRETS_FILE != ''
         name: Shred the staged secrets file
