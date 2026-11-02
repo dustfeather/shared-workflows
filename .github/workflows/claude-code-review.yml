@@ -47,8 +47,14 @@ on:
         type: number
         default: 30
     secrets:
+      # One of the two. ANTHROPIC_API_KEY (Console API key, billed per token)
+      # wins when both are set; CLAUDE_CODE_OAUTH_TOKEN (subscription) is the
+      # fallback, so a caller holding only the old secret keeps working.
+      # Neither set -> the action fails naming both.
+      ANTHROPIC_API_KEY:
+        required: false
       CLAUDE_CODE_OAUTH_TOKEN:
-        required: true
+        required: false
 
 # Top-level default: minimum read. Each job widens what it needs.
 permissions:
@@ -153,7 +159,8 @@ jobs:
         if: steps.codeql_gate.outputs.skip != 'true'
         uses: anthropics/claude-code-action@v1
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.ANTHROPIC_API_KEY == '' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           allowed_bots: ${{ inputs.allowed-bots }}
           show_full_output: ${{ inputs.show-full-output }}
           # No `path_to_bun_executable` / `path_to_claude_code_executable`.
