@@ -851,6 +851,12 @@ action fails with `Either ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN is
 required`. Dependabot-triggered runs read the separate Dependabot secret
 store (`gh secret set --app dependabot`), so the key goes there too.
 
+With `ANTHROPIC_API_KEY`, `claude.yml` and `claude-code-review.yml` send the
+`anthropic-workspace-id` header (input `anthropic-workspace-id`, default
+`wrkspc_01VU62jz7UJ9uPGiwLgqpew9`) through Claude Code's
+`ANTHROPIC_CUSTOM_HEADERS`. A key scoped to a different workspace must pass
+its own ID, or `""` to send no header; the OAuth fallback never sends it.
+
 **Reusable workflows run in the caller's context with the caller's secrets.**
 The central repo's secrets are not visible to callers; each caller pays for
 its own Claude usage with its own token.

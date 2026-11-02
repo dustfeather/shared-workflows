@@ -31,6 +31,14 @@ on:
           rather than forking.
         type: number
         default: 60
+      anthropic-workspace-id:
+        description: |
+          Claude Console workspace sent as the `anthropic-workspace-id` header
+          (via Claude Code's ANTHROPIC_CUSTOM_HEADERS). Sent only when
+          ANTHROPIC_API_KEY is set; the OAuth fallback never carries it. Empty
+          string sends no header (a workspace-scoped key needs none).
+        type: string
+        default: "wrkspc_01VU62jz7UJ9uPGiwLgqpew9"
     secrets:
       # One of the two. ANTHROPIC_API_KEY (Console API key, billed per token)
       # wins when both are set; CLAUDE_CODE_OAUTH_TOKEN (subscription) is the
@@ -71,6 +79,8 @@ jobs:
 
       - name: Run Claude Code
         uses: anthropics/claude-code-action@v1
+        env:
+          ANTHROPIC_CUSTOM_HEADERS: "${{ secrets.ANTHROPIC_API_KEY != '' && inputs.anthropic-workspace-id != '' && format('anthropic-workspace-id: {0}', inputs.anthropic-workspace-id) || '' }}"
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_code_oauth_token: ${{ secrets.ANTHROPIC_API_KEY == '' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
