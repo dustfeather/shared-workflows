@@ -40,6 +40,12 @@ on:
         required: false
       CLAUDE_CODE_OAUTH_TOKEN:
         required: false
+      # Optional. Claude Console workspace ID, sent as the
+      # `anthropic-workspace-id` header (via Claude Code's
+      # ANTHROPIC_CUSTOM_HEADERS) and only alongside ANTHROPIC_API_KEY. Needed
+      # for a key that can act on several workspaces; unset sends no header.
+      ANTHROPIC_WORKSPACE_ID:
+        required: false
 
 # Top-level default: minimum read. The job widens what it needs.
 permissions:
@@ -71,6 +77,8 @@ jobs:
 
       - name: Run Claude Code
         uses: anthropics/claude-code-action@v1
+        env:
+          ANTHROPIC_CUSTOM_HEADERS: "${{ secrets.ANTHROPIC_API_KEY != '' && secrets.ANTHROPIC_WORKSPACE_ID != '' && format('anthropic-workspace-id: {0}', secrets.ANTHROPIC_WORKSPACE_ID) || '' }}"
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_code_oauth_token: ${{ secrets.ANTHROPIC_API_KEY == '' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
