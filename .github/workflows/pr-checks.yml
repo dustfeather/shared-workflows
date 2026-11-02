@@ -35,7 +35,6 @@ jobs:
     # a ref that does not exist yet cannot be pinned before its tag is cut.
     # Landed directly on main instead, as the `@v6` to `@v8` bumps before it.
     uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v9
-    with:
-      runner: arc-df-shared-workflows
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANTHROPIC_WORKSPACE_ID: ${{ secrets.ANTHROPIC_WORKSPACE_ID }}
