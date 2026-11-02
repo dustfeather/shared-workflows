@@ -571,7 +571,7 @@ logged.
     secret-name: social-update-secrets
   secrets:
     SECRET_LITERALS: |
-      CLAUDE_CODE_OAUTH_TOKEN=${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
 `GHCR_PULL_PAT` is only needed when `ghcr-pull-secret` is set, i.e. the

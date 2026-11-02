@@ -66,7 +66,7 @@ The fix is to pass the secret explicitly:
 
 ```yaml
 secrets:
-  CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
 The reference resolves in the caller's context, where the org-level

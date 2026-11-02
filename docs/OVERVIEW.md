@@ -31,7 +31,7 @@ Other layout: `runner-image/` (the pre-baked runner Dockerfile), `k8s/` (ARC sca
 
 ## Deploy
 
-The reusable workflows are **consumed by other repos** via a shim that pins `@v1` and passes secrets (`secrets: inherit` for same-owner `dustfeather/*` callers; explicit `CLAUDE_CODE_OAUTH_TOKEN` pass for cross-owner `ITGuys-RO/*` callers).
+The reusable workflows are **consumed by other repos** via a shim that pins `@v1` and passes secrets (`secrets: inherit` for same-owner `dustfeather/*` callers; explicit `ANTHROPIC_API_KEY` pass for cross-owner `ITGuys-RO/*` callers).
 
 The runner images run **IN-CLUSTER** — ARC scale sets on the k3s cluster, with each scale set's Helm release overridden to point its `runner` container at `ghcr.io/dustfeather/actions-runner-claude:latest` (`k8s/runner-scale-set-image-override.yaml`). A `ghcr-pull-refresher` CronJob mints a GHCR pull credential from the `github-app-dustfeather` App every 30 min so the image can stay private.
 
