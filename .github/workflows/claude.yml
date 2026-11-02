@@ -32,8 +32,14 @@ on:
         type: number
         default: 60
     secrets:
+      # One of the two. ANTHROPIC_API_KEY (Console API key, billed per token)
+      # wins when both are set; CLAUDE_CODE_OAUTH_TOKEN (subscription) is the
+      # fallback, so a caller holding only the old secret keeps working.
+      # Neither set -> the action fails naming both.
+      ANTHROPIC_API_KEY:
+        required: false
       CLAUDE_CODE_OAUTH_TOKEN:
-        required: true
+        required: false
 
 # Top-level default: minimum read. The job widens what it needs.
 permissions:
@@ -66,7 +72,8 @@ jobs:
       - name: Run Claude Code
         uses: anthropics/claude-code-action@v1
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.ANTHROPIC_API_KEY == '' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           # No `settings:` input, and therefore no PreToolUse hook. In this
           # tag-triggered mode the action supplies its own default
           # `allowedTools` — read-only tools plus `git add`/`commit`/`rm` and

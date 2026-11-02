@@ -840,11 +840,16 @@ Note this is a *hardening* measure, not a fix for a broken audit: as of
 audit step fails, check for the hang described in issue #24 before suspecting
 credentials.
 
-### Claude — `CLAUDE_CODE_OAUTH_TOKEN`
+### Claude — `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`
 
-Each calling repo must have `CLAUDE_CODE_OAUTH_TOKEN` set — either as a
-repository secret or inherited from an organization secret. The shim then
-needs to pass it through.
+Each calling repo must have one of `ANTHROPIC_API_KEY` (Console API key,
+billed per token) or `CLAUDE_CODE_OAUTH_TOKEN` (subscription token) set,
+either as a repository secret or inherited from an organization secret. The
+shim then needs to pass it through. When both reach the workflow,
+`ANTHROPIC_API_KEY` wins and the OAuth token is not sent. Neither set: the
+action fails with `Either ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN is
+required`. Dependabot-triggered runs read the separate Dependabot secret
+store (`gh secret set --app dependabot`), so the key goes there too.
 
 **Reusable workflows run in the caller's context with the caller's secrets.**
 The central repo's secrets are not visible to callers; each caller pays for
@@ -888,7 +893,7 @@ jobs:
   review:
     uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v6
     secrets:
-      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
 This works in both cases (same-owner and cross-owner), so when in doubt,
