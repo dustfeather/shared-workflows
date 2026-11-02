@@ -256,7 +256,12 @@ jobs:
             #
             # Carriage returns go too: a lone CR rewrites the line in a terminal
             # and would let a forged annotation hide the text it replaced.
-            pr_title=$(printf '%s' "$pr_title" | tr -d '\r' | head -n 1)
+            #
+            # Parameter expansion, not `tr | head -n 1`: under pipefail, head
+            # exiting after line one can SIGPIPE tr, killing the step with 141
+            # at random on exactly the multi-line titles this line exists for.
+            pr_title=${pr_title//$'\r'/}
+            pr_title=${pr_title%%$'\n'*}
             # Subjects come from REST, NOT `gh pr view --json commits`. That
             # field is GraphQL `messageHeadline`, which returns GitHub's DISPLAY
             # form: measured on this PR, every subject longer than 72 characters
