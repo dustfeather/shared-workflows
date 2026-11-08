@@ -20,13 +20,20 @@ It also bakes Temurin JDK 21 into the runner tool-cache at
 (e.g. `21.0.13-9.0.LTS`, plus an `x64.complete` marker), so
 `actions/setup-java` with `distribution: temurin` and `java-version: 21`
 skips the GitHub-releases download (which 504'd on dosar-rapid.ro run
-42468810607). The latest GA is resolved from the Adoptium API at build time
-and checked with sha256; the weekly rebuild keeps the patch current.
-`runner-image.yml` passes the resolved version as
-`--build-arg JAVA_TEMURIN_VERSION=<ver>` (cache-busting; the build fails if it
-differs from what the API returns). The JDK is not on PATH and `JAVA_HOME` is
-unset; `setup-java` sets both per job. Change the major with
-`--build-arg JAVA_TEMURIN_MAJOR=<n>`.
+42468810607). The JDK is installed from Adoptium's own apt repo
+(`packages.adoptium.net`, signed key; nothing from GitHub releases) into
+`/usr/lib/jvm`, and the tool-cache `x64` entry is a symlink to it; the weekly
+rebuild keeps the patch current. `runner-image.yml` reads the newest
+`temurin-21-jdk` version from that same repo's index and passes it as
+`--build-arg JAVA_TEMURIN_VERSION=<ver>` (e.g. `21.0.13.0.0+9-1`): an exact
+`apt-get install` pin that also busts the layer cache on a new release, and
+the smoke test asserts `dpkg-query` equals it. The apt package registers `java` via update-alternatives, so
+it is on PATH as on GitHub-hosted runners; `setup-java` still sets `JAVA_HOME`
+per job. Change the major with `--build-arg JAVA_TEMURIN_MAJOR=<n>`.
+
+Bun is installed from the npm registry package `@oven/bun-linux-x64` (tarball
+checked against the registry's sha512 integrity), not from GitHub releases,
+which were returning 504s.
 
 The plugin is baked rather than installed per job because declaring it in
 `settings.json` does not install it — Claude Code reads `enabledPlugins`

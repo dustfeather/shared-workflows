@@ -98,18 +98,24 @@ jobs:
           echo "playwright latest -> $v"
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
-      # Latest GA Temurin 21 JDK, raw Adoptium semver (e.g. 21.0.13+9.0.LTS).
-      # The Dockerfile compares against this exact string, and setup-java
-      # derives its tool-cache dir name from it ('+' -> '-').
+      # Highest temurin-21-jdk version in the Adoptium apt repo (e.g.
+      # 21.0.13.0.0+9-1). This is the exact apt version the Dockerfile pins,
+      # so a new release busts the layer cache and apt-repo lag cannot
+      # mismatch. 'noble' is the actions-runner base codename
+      # (mcr.microsoft.com/dotnet/runtime-deps:8.0-noble upstream); if the
+      # base moves codename, change it here.
       - name: Resolve Temurin 21 version
         id: temurin
         run: |
           set -euo pipefail
           v=$(curl -fsSL --retry 5 --retry-all-errors \
-            "https://api.adoptium.net/v3/assets/latest/21/hotspot?architecture=x64&image_type=jdk&os=linux&vendor=eclipse" \
-            | jq -r '.[0].version.semver // empty')
+            https://packages.adoptium.net/artifactory/deb/dists/noble/main/binary-amd64/Packages \
+            | awk '
+                /^Package: /{p=($2=="temurin-21-jdk")}
+                p && /^Version: /{print $2}
+              ' | sort -V | tail -1)
           if [ -z "$v" ]; then
-            echo "::error::cannot resolve the latest Temurin 21 version from Adoptium"
+            echo "::error::cannot resolve the temurin-21-jdk version from the Adoptium apt repo"
             exit 1
           fi
           echo "temurin 21 latest -> $v"
@@ -159,8 +165,16 @@ jobs:
           command -v faketime >/dev/null || { echo "faketime not on PATH"; exit 1; }
           : "${JAVA_TEMURIN_VERSION:?JAVA_TEMURIN_VERSION not set}"
           tc=/opt/hostedtoolcache/Java_Temurin-Hotspot_jdk
-          vdir="$tc/${JAVA_TEMURIN_VERSION/+/-}"
-          [ -d "$vdir" ] || { echo "temurin tool-cache version dir missing: $vdir"; exit 1; }
+          shopt -s nullglob
+          entries=("$tc"/*)
+          shopt -u nullglob
+          printf 'temurin tool-cache entries (%s):\n' "${#entries[@]}"
+          printf '  %s\n' "${entries[@]}"
+          [ "${#entries[@]}" -eq 1 ] || { echo "expected exactly one temurin tool-cache entry, got ${#entries[@]}"; exit 1; }
+          vdir="${entries[0]}"
+          [[ "$(basename "$vdir")" =~ ^21\.[0-9]+\.[0-9]+-[0-9]+\.0\.LTS$ ]] || { echo "unexpected temurin tool-cache dir name: $vdir"; exit 1; }
+          pkgv=$(dpkg-query -W -f='${Version}' temurin-21-jdk)
+          [ "$pkgv" = "$JAVA_TEMURIN_VERSION" ] || { echo "dpkg temurin-21-jdk $pkgv != $JAVA_TEMURIN_VERSION"; exit 1; }
           [ -x "$vdir/x64/bin/java" ] || { echo "temurin java missing or not executable: $vdir/x64/bin/java"; exit 1; }
           [ -e "$vdir/x64.complete" ] || { echo "temurin .complete marker missing: $vdir/x64.complete"; exit 1; }
           jout=$("$vdir/x64/bin/java" -version 2>&1) || { echo "$jout"; echo "java -version failed"; exit 1; }

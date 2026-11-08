@@ -30,11 +30,12 @@
 #     resolves `node-version:` from there with zero download, so callers of
 #     node-test.yml skip the ~20 s per-job Node fetch. RUNNER_TOOL_CACHE is
 #     pinned (see ENV below) so this baked cache is actually consulted.
-#   - Temurin JDK 21 (latest GA, resolved from the Adoptium API at build time)
-#     in the runner tool-cache (/opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/
+#   - Temurin JDK 21 (Adoptium apt repo, not GitHub) in /usr/lib/jvm, linked
+#     into the runner tool-cache (/opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/
 #     <ver>/x64), so `actions/setup-java` (temurin) resolves it with no
-#     download. Not on PATH; setup-java sets JAVA_HOME per job.
-#   - Bun pinned to the version anthropics/claude-code-action@v1 expects
+#     download. On PATH via update-alternatives; setup-java sets JAVA_HOME per job.
+#   - Bun (npm registry package, integrity-checked) pinned to the version
+#     anthropics/claude-code-action@v1 expects
 #   - @anthropic-ai/claude-code globally (Claude Code CLI)
 #   - Python 3 + pip, with `jsonschema`, `PyJWT`, and `cryptography`
 #     globally installed (jsonschema is used by dustfeather/dustfeather's
@@ -61,9 +62,10 @@
 #   - Playwright chromium system deps (`playwright install-deps chromium`) and
 #     faketime. The browser binary is still downloaded per job.
 #
-# Wired into the review workflow via `path_to_bun_executable` and
-# `path_to_claude_code_executable`, so the action skips its own Bun and
-# Claude Code installs at runtime.
+# bun and claude are on PATH (/usr/local/bin) for callers pinned to an ARC pool.
+# claude-code-review.yml no longer passes path_to_bun_executable /
+# path_to_claude_code_executable (dropped in v8), so the action finds them via
+# PATH there and installs its own on hosted runners.
 
 ARG BASE_TAG=latest
 FROM ghcr.io/actions/actions-runner:${BASE_TAG}
@@ -216,14 +218,28 @@ RUN set -eux; \
 # the .0.LTS suffix is kept because setup-java writes it and, with
 # `check-latest: true`, compares the cached version to the API's exact semver.
 #
-# The latest GA release is resolved from the Adoptium API at build time, so
-# the weekly image rebuild keeps the patch current. JAVA_TEMURIN_VERSION is a
-# cache-busting build-arg: runner-image.yml passes the version it resolved, so
-# a new release changes the BuildKit cache key. When set, the RUN asserts the
-# API-resolved semver (e.g. 21.0.13+9.0.LTS, the form the workflow passes)
-# equals it, so a stale layer cannot silently mismatch. Empty = local build.
+# The JDK is installed from Adoptium's own apt repo (packages.adoptium.net,
+# signed key, apt verifies it), NOT from GitHub releases or the Adoptium API:
+# a GitHub releases outage (504s) broke image builds. The package lands in
+# /usr/lib/jvm/temurin-<major>-jdk-amd64; the tool-cache x64 entry is a symlink
+# to it (as actions/runner-images does). The weekly rebuild picks up the
+# current patch from the repo.
 #
-# Deliberately NOT on PATH and no JAVA_HOME: setup-java sets both per job.
+# JAVA_TEMURIN_VERSION is the APT package version (e.g. 21.0.13.0.0+9-1),
+# resolved by runner-image.yml from this same apt repo index; it also busts the
+# build cache. When set, the RUN installs temurin-<major>-jdk=<that version>, an
+# exact pin that fails loudly if the repo no longer has it. Empty = local build:
+# install unpinned.
+#
+# The tool-cache dir name is ALWAYS derived from the installed JDK's release
+# file, never from the build-arg: SEMANTIC_VERSION with the first '+' turned
+# into '-' and ".0.LTS" appended (21.0.13+9 -> 21.0.13-9.0.LTS), because
+# Adoptium's API semver for LTS GA builds is <ver>+<build>.0.LTS and setup-java
+# writes and, with `check-latest: true`, compares that form. This assumes an LTS
+# major (21, 25, ...), which JAVA_TEMURIN_MAJOR must be.
+#
+# The apt package registers java via update-alternatives, so java IS on PATH
+# (like GitHub-hosted runners); setup-java still sets JAVA_HOME per job.
 # Ownership: chown only the new Java tree. Re-chowning the whole tool-cache
 # root would copy the Node tree baked above into this layer a second time
 # (overlayfs copies a file up on any setattr, even a no-op one).
@@ -231,46 +247,62 @@ ARG JAVA_TEMURIN_MAJOR=21
 ARG JAVA_TEMURIN_VERSION=
 RUN set -eux; \
     arch=x64; \
-    meta="$(curl -fsSL --retry 5 --retry-all-errors \
-        "https://api.adoptium.net/v3/assets/latest/${JAVA_TEMURIN_MAJOR}/hotspot?architecture=${arch}&image_type=jdk&os=linux&vendor=eclipse")"; \
-    link="$(printf '%s' "$meta" | jq -er '.[0].binary.package.link')"; \
-    sha="$(printf '%s' "$meta" | jq -er '.[0].binary.package.checksum')"; \
-    semver="$(printf '%s' "$meta" | jq -er '.[0].version.semver')"; \
-    if [ -n "${JAVA_TEMURIN_VERSION}" ] && [ "${JAVA_TEMURIN_VERSION}" != "$semver" ]; then \
-        echo "JAVA_TEMURIN_VERSION=${JAVA_TEMURIN_VERSION} != Adoptium latest ${semver}" >&2; exit 1; \
+    . /etc/os-release; \
+    install -m 0755 -d /etc/apt/keyrings; \
+    curl -fsSL --retry 5 --retry-all-errors https://packages.adoptium.net/artifactory/api/gpg/key/public \
+        | gpg --dearmor -o /etc/apt/keyrings/adoptium.gpg; \
+    chmod a+r /etc/apt/keyrings/adoptium.gpg; \
+    echo "deb [signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb ${VERSION_CODENAME} main" \
+        > /etc/apt/sources.list.d/adoptium.list; \
+    apt-get update; \
+    if [ -n "${JAVA_TEMURIN_VERSION}" ]; then \
+        apt-get install -y --no-install-recommends "temurin-${JAVA_TEMURIN_MAJOR}-jdk=${JAVA_TEMURIN_VERSION}"; \
+    else \
+        apt-get install -y --no-install-recommends "temurin-${JAVA_TEMURIN_MAJOR}-jdk"; \
     fi; \
-    verdir="$(printf '%s' "$semver" | sed 's/+/-/')"; \
+    rm -rf /var/lib/apt/lists/*; \
+    set -- /usr/lib/jvm/temurin-${JAVA_TEMURIN_MAJOR}-jdk-*; \
+    if [ "$#" -ne 1 ] || [ ! -d "$1" ]; then \
+        echo "expected exactly one /usr/lib/jvm/temurin-${JAVA_TEMURIN_MAJOR}-jdk-*, got: $*" >&2; exit 1; \
+    fi; \
+    jdk="$1"; \
+    semver="$(sed -n 's/^SEMANTIC_VERSION="\(.*\)"$/\1/p' "$jdk/release")"; \
+    [ -n "$semver" ]; \
+    case "$semver" in \
+        *.*.*.*+*) echo "4-part respin ${semver}: setup-java's tool-cache lookup rejects it (semver.clean), refusing to bake an unusable dir" >&2; exit 1 ;; \
+    esac; \
+    verdir="$(printf '%s' "$semver" | sed 's/+/-/;s/$/.0.LTS/')"; \
     base="${RUNNER_TOOL_CACHE}/Java_Temurin-Hotspot_jdk/${verdir}"; \
-    dest="${base}/${arch}"; \
-    mkdir -p "$dest"; \
-    curl -fsSL --retry 5 --retry-all-errors "$link" -o /tmp/temurin.tar.gz; \
-    echo "${sha}  /tmp/temurin.tar.gz" | sha256sum -c -; \
-    tar -xzf /tmp/temurin.tar.gz -C "$dest" --strip-components=1; \
-    rm -f /tmp/temurin.tar.gz; \
+    mkdir -p "$base"; \
+    ln -s "$jdk" "${base}/${arch}"; \
     touch "${base}/${arch}.complete"; \
-    chown -R runner:runner "${RUNNER_TOOL_CACHE}/Java_Temurin-Hotspot_jdk"; \
-    "$dest/bin/java" -version
+    chown -hR runner:runner "${RUNNER_TOOL_CACHE}/Java_Temurin-Hotspot_jdk"; \
+    "${base}/${arch}/bin/java" -version
 
-# Bun. The official installer drops to ~/.bun; move into /usr/local/bin so
-# it lives on PATH for both root and the `runner` user with no shell rc
-# manipulation. `bun-v${BUN_VERSION}` pins the release tag.
+# Bun, from the npm registry package @oven/bun-linux-x64 (the same linux x64
+# binary bun's own installer ships), installed to /usr/local/bin so it lives
+# on PATH for both root and the `runner` user with no shell rc manipulation.
 #
-# The installer fetches the zip from GitHub releases with no retry of its own,
-# and a 504 there failed the whole image build (run 42469187873). So: save the
-# installer to a file (piping a failed curl into bash runs an empty script and
-# exits 0) and retry running it.
+# Not bun.sh/install: that fetches from GitHub releases, and a GitHub releases
+# outage (504s) failed image builds 42469187873 and 42470282936. The npm
+# registry is a separate path. The tarball is verified against the registry's
+# published sha512 SRI integrity value (openssl comes with ca-certificates,
+# installed above). BUN_VERSION must stay in sync with claude-code-action (see
+# the ARG above).
 RUN set -eux; \
-    curl -fsSL --retry 5 --retry-all-errors -o /tmp/bun-install.sh https://bun.sh/install; \
-    for i in 1 2 3 4 5; do \
-        rm -rf /root/.bun; \
-        bash /tmp/bun-install.sh "bun-v${BUN_VERSION}" && break; \
-        [ "$i" -lt 5 ] || exit 1; \
-        sleep 30; \
-    done; \
-    rm -f /tmp/bun-install.sh; \
-    install -m 0755 /root/.bun/bin/bun /usr/local/bin/bun; \
-    rm -rf /root/.bun; \
-    bun --version
+    url="$(npm view "@oven/bun-linux-x64@${BUN_VERSION}" dist.tarball)"; \
+    integrity="$(npm view "@oven/bun-linux-x64@${BUN_VERSION}" dist.integrity)"; \
+    [ -n "$url" ] && [ -n "$integrity" ]; \
+    curl -fsSL --retry 5 --retry-all-errors -o /tmp/bun.tgz "$url"; \
+    actual="sha512-$(openssl dgst -sha512 -binary /tmp/bun.tgz | base64 -w0)"; \
+    if [ "$actual" != "$integrity" ]; then \
+        echo "bun tarball integrity mismatch: expected ${integrity} got ${actual}" >&2; exit 1; \
+    fi; \
+    mkdir /tmp/bun-pkg; \
+    tar -xzf /tmp/bun.tgz -C /tmp/bun-pkg; \
+    install -m 0755 /tmp/bun-pkg/package/bin/bun /usr/local/bin/bun; \
+    rm -rf /tmp/bun.tgz /tmp/bun-pkg; \
+    [ "$(bun --version)" = "${BUN_VERSION}" ]
 
 # Claude Code CLI globally. `npm i -g` lands the binary in
 # /usr/bin/claude on Debian Node packages — symlink to /usr/local/bin to
