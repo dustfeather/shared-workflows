@@ -16,6 +16,15 @@ on:
 permissions:
   contents: read
 
+# One build at a time. Every run pushes :latest, so two overlapping runs
+# could finish out of order and publish the older image last. The running
+# build is never cancelled (cancelling mid-push can leave the three tags
+# pointing at different images); GitHub keeps at most one queued run and a
+# newer one replaces it, which is fine since the newer one carries more.
+concurrency:
+  group: runner-image
+  cancel-in-progress: false
+
 jobs:
   build:
     # Run on GitHub-hosted, not on our own ARC pool — the ARC pool will be

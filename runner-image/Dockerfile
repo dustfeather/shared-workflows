@@ -262,6 +262,7 @@ RUN set -eux; \
 RUN set -eux; \
     curl -fsSL --retry 5 --retry-all-errors -o /tmp/bun-install.sh https://bun.sh/install; \
     for i in 1 2 3 4 5; do \
+        rm -rf /root/.bun; \
         bash /tmp/bun-install.sh "bun-v${BUN_VERSION}" && break; \
         [ "$i" -lt 5 ] || exit 1; \
         sleep 30; \
