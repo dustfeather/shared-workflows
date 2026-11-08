@@ -53,6 +53,9 @@
 #     `cd $GITHUB_ACTION_PATH && bun install --production` it runs resolves
 #     from /home/runner/.bun/install/cache (~1-2 s) instead of downloading
 #     (~20 s).
+#   - TURBO_TELEMETRY_DISABLED=1 and DO_NOT_TRACK=1 in the image env.
+#   - Playwright chromium system deps (`playwright install-deps chromium`) and
+#     faketime. The browser binary is still downloaded per job.
 #
 # Wired into the review workflow via `path_to_bun_executable` and
 # `path_to_claude_code_executable`, so the action skips its own Bun and
@@ -119,6 +122,11 @@ ENV FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true
 # which is wiped each job — meaning a baked tool-cache would never be found.
 # Pinning it here makes setup-node consult the image-baked Node below.
 ENV RUNNER_TOOL_CACHE=/opt/hostedtoolcache
+
+# Telemetry off. A caller's workflow-level `env:` does not reach jobs inside a
+# reusable workflow (node-test.yml, deploy-cloudflare.yml), so telemetry-off
+# has to come from the image.
+ENV TURBO_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1
 
 # System packages: build-essential + pkg-config + libssl-dev because
 # ubuntu-latest ships a C toolchain and jobs moved from it assume one
@@ -258,6 +266,25 @@ RUN set -eux; \
     python -m pip install --no-cache-dir --break-system-packages \
         "code-review-graph==${CRG_VERSION}"; \
     code-review-graph --version
+
+# Playwright chromium system deps + faketime. ARC pods are ephemeral, so every
+# job was apt-installing ~85 packages (82 MB) via `playwright install
+# --with-deps`. Only system deps are baked here; the browser binary itself is
+# still downloaded per job by `playwright install chromium` (callers then drop
+# --with-deps). faketime because dosar-rapid.ro's clock-sweep.yml installs it
+# the same way.
+# PLAYWRIGHT_VERSION: runner-image.yml resolves the concrete version from the
+# npm registry each run (`npm view playwright version`) and passes it as a
+# build-arg, so a new Playwright release changes the BuildKit cache key and
+# re-runs install-deps. The default "latest" only applies to local builds
+# (a fixed string never changes the cache key).
+ARG PLAYWRIGHT_VERSION=latest
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends faketime; \
+    npx -y "playwright@${PLAYWRIGHT_VERSION}" --version; \
+    npx -y "playwright@${PLAYWRIGHT_VERSION}" install-deps chromium; \
+    rm -rf /var/lib/apt/lists/* /root/.npm
 
 USER runner
 

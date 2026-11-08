@@ -7,6 +7,14 @@ expects), `@anthropic-ai/claude-code`, and the
 `pr-review-toolkit@claude-plugins-official` Claude Code plugin that
 `claude-code-review.yml`'s standard track fans out to.
 
+It also sets `TURBO_TELEMETRY_DISABLED=1` and `DO_NOT_TRACK=1` (a caller's
+workflow-level `env:` does not reach jobs inside a reusable workflow, so
+telemetry-off has to come from the image), and bakes the Playwright
+chromium system deps plus `faketime` (the browser binary itself is still
+downloaded per job by `playwright install chromium`; callers drop
+`--with-deps`). Pin the Playwright version with
+`--build-arg PLAYWRIGHT_VERSION=<ver>`; default is `latest`.
+
 The plugin is baked rather than installed per job because declaring it in
 `settings.json` does not install it — Claude Code reads `enabledPlugins`
 and `extraKnownMarketplaces` but performs no fetch, so a settings-only

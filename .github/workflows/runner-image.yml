@@ -75,25 +75,104 @@ jobs:
           echo "actions-runner latest -> $version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push
+      # Resolve the Playwright version once, so the version baked into the
+      # image and the one the smoke test installs are the same by construction.
+      - name: Resolve Playwright version
+        id: playwright
+        run: |
+          set -euo pipefail
+          v=$(npm view playwright version)
+          if [ -z "$v" ]; then
+            echo "::error::cannot resolve the latest playwright version"
+            exit 1
+          fi
+          echo "playwright latest -> $v"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      # Build into the local daemon without pushing, so the smoke test below
+      # can gate what reaches `:latest`. The tested image itself is retagged
+      # and pushed afterwards; cache-to stays here so a failed smoke test
+      # still warms the cache.
+      - name: Build (load, no push)
         uses: docker/build-push-action@v7
         with:
           context: runner-image
           file: runner-image/Dockerfile
-          push: true
+          load: true
+          push: false
           build-args: |
             BASE_TAG=${{ steps.base.outputs.version }}
             RUNNER_VERSION=${{ steps.base.outputs.version }}
+            PLAYWRIGHT_VERSION=${{ steps.playwright.outputs.version }}
           # Always re-pull the base image. `cache-from` below caches the
           # `FROM` resolution too, so without this the scheduled run would
           # rebuild the identical digest and re-resolve nothing.
           pull: true
-          # amd64 only: the ARC node (acer-laptop) is x86_64. Add arm64
-          # here if/when an arm runner joins the pool.
+          # amd64 only: the ARC node is x86_64. Add arm64 here if/when an arm
+          # runner joins the pool.
           platforms: linux/amd64
-          tags: |
-            ${{ env.IMAGE }}:latest
-            ${{ env.IMAGE }}:sha-${{ github.sha }}
-            ${{ env.IMAGE }}:runner-${{ steps.base.outputs.version }}
+          # No attestation manifest: the docker exporter behind `load: true`
+          # cannot load a manifest list, and the push below sends the loaded
+          # image, which would drop the attestation anyway.
+          provenance: false
+          tags: runner-image-smoke:local
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
+
+      # Runs as the image's default user (runner), the same one ARC jobs use.
+      # Fails the job, and therefore the push below, if the baked env or tools
+      # are missing or if a downloaded chromium has unresolved shared libs.
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          script=$(cat <<'EOF'
+          set -euo pipefail
+          [ "${TURBO_TELEMETRY_DISABLED:-}" = "1" ] || { echo "TURBO_TELEMETRY_DISABLED != 1"; exit 1; }
+          [ "${DO_NOT_TRACK:-}" = "1" ] || { echo "DO_NOT_TRACK != 1"; exit 1; }
+          command -v faketime >/dev/null || { echo "faketime not on PATH"; exit 1; }
+          : "${PLAYWRIGHT_VERSION:?PLAYWRIGHT_VERSION not set}"
+          npx -y playwright@"$PLAYWRIGHT_VERSION" install chromium
+          bins=$(find "$HOME/.cache/ms-playwright" -type f \( -name chrome -o -name headless_shell -o -name chrome-headless-shell \) -perm -u+x)
+          [ -n "$bins" ] || { echo "no chromium executables found"; exit 1; }
+          bad=0
+          while IFS= read -r bin; do
+            echo "ldd $bin"
+            out=$(ldd "$bin" 2>&1) || { echo "$out"; bad=1; continue; }
+            missing=$(grep 'not found' <<<"$out" || true)
+            if [ -n "$missing" ]; then
+              echo "$missing"
+              bad=1
+            fi
+          done <<<"$bins"
+          [ "$bad" = "0" ] || { echo "unresolved shared libraries or ldd failure"; exit 1; }
+          # ldd cannot see dlopen'd libs, so actually launch each binary.
+          while IFS= read -r bin; do
+            echo "launch $bin"
+            timeout 60 "$bin" --headless --no-sandbox --disable-gpu --disable-dev-shm-usage --dump-dom about:blank </dev/null >/dev/null \
+              || { echo "headless launch failed: $bin"; bad=1; }
+          done <<<"$bins"
+          [ "$bad" = "0" ] || { echo "chromium launch failed"; exit 1; }
+          EOF
+          )
+          docker run --rm -e PLAYWRIGHT_VERSION="$PLAYWRIGHT_VERSION" \
+            --entrypoint bash runner-image-smoke:local -c "$script"
+        env:
+          PLAYWRIGHT_VERSION: ${{ steps.playwright.outputs.version }}
+
+      # Push the exact image the smoke test passed, not a rebuild. The old
+      # push step set no labels or annotations (only tags), so nothing but the
+      # provenance/SBOM attestation that build-push-action adds on push is
+      # lost by pushing a locally loaded image; that loss is accepted.
+      # Single platform (linux/amd64): the ARC node is x86_64.
+      - name: Push tested image
+        run: |
+          set -euo pipefail
+          for t in \
+            "${IMAGE}:latest" \
+            "${IMAGE}:sha-${GITHUB_SHA}" \
+            "${IMAGE}:runner-${BASE_VERSION}"; do
+            docker tag runner-image-smoke:local "$t"
+            docker push "$t"
+          done
+        env:
+          BASE_VERSION: ${{ steps.base.outputs.version }}
