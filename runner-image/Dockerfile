@@ -254,8 +254,19 @@ RUN set -eux; \
 # Bun. The official installer drops to ~/.bun; move into /usr/local/bin so
 # it lives on PATH for both root and the `runner` user with no shell rc
 # manipulation. `bun-v${BUN_VERSION}` pins the release tag.
+#
+# The installer fetches the zip from GitHub releases with no retry of its own,
+# and a 504 there failed the whole image build (run 42469187873). So: save the
+# installer to a file (piping a failed curl into bash runs an empty script and
+# exits 0) and retry running it.
 RUN set -eux; \
-    curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}"; \
+    curl -fsSL --retry 5 --retry-all-errors -o /tmp/bun-install.sh https://bun.sh/install; \
+    for i in 1 2 3 4 5; do \
+        bash /tmp/bun-install.sh "bun-v${BUN_VERSION}" && break; \
+        [ "$i" -lt 5 ] || exit 1; \
+        sleep 30; \
+    done; \
+    rm -f /tmp/bun-install.sh; \
     install -m 0755 /root/.bun/bin/bun /usr/local/bin/bun; \
     rm -rf /root/.bun; \
     bun --version
