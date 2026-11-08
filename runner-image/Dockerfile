@@ -30,6 +30,10 @@
 #     resolves `node-version:` from there with zero download, so callers of
 #     node-test.yml skip the ~20 s per-job Node fetch. RUNNER_TOOL_CACHE is
 #     pinned (see ENV below) so this baked cache is actually consulted.
+#   - Temurin JDK 21 (latest GA, resolved from the Adoptium API at build time)
+#     in the runner tool-cache (/opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/
+#     <ver>/x64), so `actions/setup-java` (temurin) resolves it with no
+#     download. Not on PATH; setup-java sets JAVA_HOME per job.
 #   - Bun pinned to the version anthropics/claude-code-action@v1 expects
 #   - @anthropic-ai/claude-code globally (Claude Code CLI)
 #   - Python 3 + pip, with `jsonschema`, `PyJWT`, and `cryptography`
@@ -201,6 +205,51 @@ RUN set -eux; \
     touch "${RUNNER_TOOL_CACHE}/node/${NODE_TOOLCACHE_VERSION}/${arch}.complete"; \
     chown -R runner:runner "${RUNNER_TOOL_CACHE}"; \
     "$dest/bin/node" --version
+
+# Bake Temurin JDK into the runner tool-cache so `actions/setup-java`
+# (distribution: temurin) finds it locally. Without it setup-java downloads
+# from GitHub releases every job; that download returned 504 three times on
+# dosar-rapid.ro run 42468810607. Layout setup-java expects:
+# <toolcache>/Java_Temurin-Hotspot_jdk/<version>/x64 (the JDK root: bin/,
+# lib/, release) plus a SIBLING <version>/x64.complete marker. <version> is
+# the Adoptium semver with the first '+' turned into '-' (21.0.13-9.0.LTS);
+# the .0.LTS suffix is kept because setup-java writes it and, with
+# `check-latest: true`, compares the cached version to the API's exact semver.
+#
+# The latest GA release is resolved from the Adoptium API at build time, so
+# the weekly image rebuild keeps the patch current. JAVA_TEMURIN_VERSION is a
+# cache-busting build-arg: runner-image.yml passes the version it resolved, so
+# a new release changes the BuildKit cache key. When set, the RUN asserts the
+# API-resolved semver (e.g. 21.0.13+9.0.LTS, the form the workflow passes)
+# equals it, so a stale layer cannot silently mismatch. Empty = local build.
+#
+# Deliberately NOT on PATH and no JAVA_HOME: setup-java sets both per job.
+# Ownership: chown only the new Java tree. Re-chowning the whole tool-cache
+# root would copy the Node tree baked above into this layer a second time
+# (overlayfs copies a file up on any setattr, even a no-op one).
+ARG JAVA_TEMURIN_MAJOR=21
+ARG JAVA_TEMURIN_VERSION=
+RUN set -eux; \
+    arch=x64; \
+    meta="$(curl -fsSL --retry 5 --retry-all-errors \
+        "https://api.adoptium.net/v3/assets/latest/${JAVA_TEMURIN_MAJOR}/hotspot?architecture=${arch}&image_type=jdk&os=linux&vendor=eclipse")"; \
+    link="$(printf '%s' "$meta" | jq -er '.[0].binary.package.link')"; \
+    sha="$(printf '%s' "$meta" | jq -er '.[0].binary.package.checksum')"; \
+    semver="$(printf '%s' "$meta" | jq -er '.[0].version.semver')"; \
+    if [ -n "${JAVA_TEMURIN_VERSION}" ] && [ "${JAVA_TEMURIN_VERSION}" != "$semver" ]; then \
+        echo "JAVA_TEMURIN_VERSION=${JAVA_TEMURIN_VERSION} != Adoptium latest ${semver}" >&2; exit 1; \
+    fi; \
+    verdir="$(printf '%s' "$semver" | sed 's/+/-/')"; \
+    base="${RUNNER_TOOL_CACHE}/Java_Temurin-Hotspot_jdk/${verdir}"; \
+    dest="${base}/${arch}"; \
+    mkdir -p "$dest"; \
+    curl -fsSL --retry 5 --retry-all-errors "$link" -o /tmp/temurin.tar.gz; \
+    echo "${sha}  /tmp/temurin.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/temurin.tar.gz -C "$dest" --strip-components=1; \
+    rm -f /tmp/temurin.tar.gz; \
+    touch "${base}/${arch}.complete"; \
+    chown -R runner:runner "${RUNNER_TOOL_CACHE}/Java_Temurin-Hotspot_jdk"; \
+    "$dest/bin/java" -version
 
 # Bun. The official installer drops to ~/.bun; move into /usr/local/bin so
 # it lives on PATH for both root and the `runner` user with no shell rc

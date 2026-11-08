@@ -89,6 +89,23 @@ jobs:
           echo "playwright latest -> $v"
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
+      # Latest GA Temurin 21 JDK, raw Adoptium semver (e.g. 21.0.13+9.0.LTS).
+      # The Dockerfile compares against this exact string, and setup-java
+      # derives its tool-cache dir name from it ('+' -> '-').
+      - name: Resolve Temurin 21 version
+        id: temurin
+        run: |
+          set -euo pipefail
+          v=$(curl -fsSL --retry 5 --retry-all-errors \
+            "https://api.adoptium.net/v3/assets/latest/21/hotspot?architecture=x64&image_type=jdk&os=linux&vendor=eclipse" \
+            | jq -r '.[0].version.semver // empty')
+          if [ -z "$v" ]; then
+            echo "::error::cannot resolve the latest Temurin 21 version from Adoptium"
+            exit 1
+          fi
+          echo "temurin 21 latest -> $v"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
       # Build into the local daemon without pushing, so the smoke test below
       # can gate what reaches `:latest`. The tested image itself is retagged
       # and pushed afterwards; cache-to stays here so a failed smoke test
@@ -104,6 +121,7 @@ jobs:
             BASE_TAG=${{ steps.base.outputs.version }}
             RUNNER_VERSION=${{ steps.base.outputs.version }}
             PLAYWRIGHT_VERSION=${{ steps.playwright.outputs.version }}
+            JAVA_TEMURIN_VERSION=${{ steps.temurin.outputs.version }}
           # Always re-pull the base image. `cache-from` below caches the
           # `FROM` resolution too, so without this the scheduled run would
           # rebuild the identical digest and re-resolve nothing.
@@ -130,6 +148,14 @@ jobs:
           [ "${TURBO_TELEMETRY_DISABLED:-}" = "1" ] || { echo "TURBO_TELEMETRY_DISABLED != 1"; exit 1; }
           [ "${DO_NOT_TRACK:-}" = "1" ] || { echo "DO_NOT_TRACK != 1"; exit 1; }
           command -v faketime >/dev/null || { echo "faketime not on PATH"; exit 1; }
+          : "${JAVA_TEMURIN_VERSION:?JAVA_TEMURIN_VERSION not set}"
+          tc=/opt/hostedtoolcache/Java_Temurin-Hotspot_jdk
+          vdir="$tc/${JAVA_TEMURIN_VERSION/+/-}"
+          [ -d "$vdir" ] || { echo "temurin tool-cache version dir missing: $vdir"; exit 1; }
+          [ -x "$vdir/x64/bin/java" ] || { echo "temurin java missing or not executable: $vdir/x64/bin/java"; exit 1; }
+          [ -e "$vdir/x64.complete" ] || { echo "temurin .complete marker missing: $vdir/x64.complete"; exit 1; }
+          jout=$("$vdir/x64/bin/java" -version 2>&1) || { echo "$jout"; echo "java -version failed"; exit 1; }
+          grep -Eq 'version "21[."]' <<<"$jout" || { echo "$jout"; echo "java major != 21"; exit 1; }
           : "${PLAYWRIGHT_VERSION:?PLAYWRIGHT_VERSION not set}"
           npx -y playwright@"$PLAYWRIGHT_VERSION" install chromium
           bins=$(find "$HOME/.cache/ms-playwright" -type f \( -name chrome -o -name headless_shell -o -name chrome-headless-shell \) -perm -u+x)
@@ -155,9 +181,11 @@ jobs:
           EOF
           )
           docker run --rm -e PLAYWRIGHT_VERSION="$PLAYWRIGHT_VERSION" \
+            -e JAVA_TEMURIN_VERSION="$JAVA_TEMURIN_VERSION" \
             --entrypoint bash runner-image-smoke:local -c "$script"
         env:
           PLAYWRIGHT_VERSION: ${{ steps.playwright.outputs.version }}
+          JAVA_TEMURIN_VERSION: ${{ steps.temurin.outputs.version }}
 
       # Push the exact image the smoke test passed, not a rebuild. The old
       # push step set no labels or annotations (only tags), so nothing but the

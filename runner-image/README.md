@@ -15,6 +15,19 @@ downloaded per job by `playwright install chromium`; callers drop
 `--with-deps`). Pin the Playwright version with
 `--build-arg PLAYWRIGHT_VERSION=<ver>`; default is `latest`.
 
+It also bakes Temurin JDK 21 into the runner tool-cache at
+`/opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/<semver with first + as ->/x64`
+(e.g. `21.0.13-9.0.LTS`, plus an `x64.complete` marker), so
+`actions/setup-java` with `distribution: temurin` and `java-version: 21`
+skips the GitHub-releases download (which 504'd on dosar-rapid.ro run
+42468810607). The latest GA is resolved from the Adoptium API at build time
+and checked with sha256; the weekly rebuild keeps the patch current.
+`runner-image.yml` passes the resolved version as
+`--build-arg JAVA_TEMURIN_VERSION=<ver>` (cache-busting; the build fails if it
+differs from what the API returns). The JDK is not on PATH and `JAVA_HOME` is
+unset; `setup-java` sets both per job. Change the major with
+`--build-arg JAVA_TEMURIN_MAJOR=<n>`.
+
 The plugin is baked rather than installed per job because declaring it in
 `settings.json` does not install it — Claude Code reads `enabledPlugins`
 and `extraKnownMarketplaces` but performs no fetch, so a settings-only
