@@ -1,0 +1,39 @@
+name: Anthropic token (workload identity federation)
+description: >
+  Exchange the job's GitHub OIDC token for a short-lived Anthropic API access
+  token and resolve the newest model id of each family. No API key is stored.
+  The job needs `permissions: id-token: write`.
+
+# The ids come from the caller's repository or organization variables
+# (ANTHROPIC_FEDERATION_RULE_ID, ANTHROPIC_ORGANIZATION_ID,
+# ANTHROPIC_SERVICE_ACCOUNT_ID, ANTHROPIC_WORKSPACE_ID). No defaults on purpose:
+# they are account-specific.
+inputs:
+  federation-rule-id:
+    description: Federation rule id (fdrl_...)
+    required: true
+  organization-id:
+    description: Anthropic organization id (uuid)
+    required: true
+  service-account-id:
+    description: Service account id (svac_...)
+    required: true
+  workspace-id:
+    description: Workspace id (wrkspc_...); the token is bound to it, so no workspace header is needed
+    required: true
+
+outputs:
+  token:
+    description: Bearer access token (masked). Lives about 600 s, so mint it right before the call that uses it.
+  model-opus:
+    description: Newest claude-opus-* model id at run time
+  model-sonnet:
+    description: Newest claude-sonnet-* model id at run time
+  model-haiku:
+    description: Newest claude-haiku-* model id at run time
+
+runs:
+  # A JavaScript action runs on the runner's own Node, so the caller needs no
+  # setup-node step before it.
+  using: node24
+  main: mint.mjs
