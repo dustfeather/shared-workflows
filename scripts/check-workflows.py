@@ -65,28 +65,6 @@ import yaml
 PRIVILEGED = {
     # Pushes the built image to GHCR.
     ".github/workflows/build-push-image.yml": {"packages"},
-    # Posts the review and authenticates to the Anthropic API via OIDC.
-    ".github/workflows/claude-code-review.yml": {"pull-requests", "id-token"},
-    ".github/workflows/claude.yml": {"pull-requests", "id-token", "contents"},
-    # Merging is the point of these two, and both now close the merged PR's
-    # linked issues themselves.
-    #
-    # `issues` is on both because a merged `Closes #N` does not close anything
-    # without it: GitHub computes the link for free, but EXECUTING the close is a
-    # write to the Issues API attributed to whoever performed the merge —
-    # GITHUB_TOKEN here. Deliberate on both, and each cost its caller PRs first
-    # (merge-on-approval: uninsta, fleet-manager, invest, itguys.ro;
-    # dependabot-auto-merge: eleven callers, 2026-09-13), because this list is
-    # exactly the set that every caller must match.
-    #
-    # dependabot-auto-merge USED to be excluded here, on the reasoning that
-    # Dependabot never writes closing keywords. That is true of Dependabot's own
-    # bodies and false of the workflow: a caller can add body text to a
-    # Dependabot PR, and the reusable workflow cannot tell the difference. The
-    # exclusion bought nothing and left the two merge paths behaving differently
-    # for no reason a caller could see. Reversed deliberately (issue #35).
-    ".github/workflows/dependabot-auto-merge.yml": {"contents", "pull-requests", "issues"},
-    ".github/workflows/merge-on-approval.yml": {"contents", "pull-requests", "issues"},
     # Commits the version bump and cuts the GitHub release.
     ".github/workflows/release-extension.yml": {"contents"},
     # Not workflow_call — this one tags its own repo.
@@ -172,13 +150,6 @@ ACTION_SETUP_REF = re.compile(
 )
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 
-# Versions a workflow installs itself that runner-image/Dockerfile also bakes.
-# Keyed by the Dockerfile ARG; the value matches the workflow's own literal.
-# Anchored on the env key rather than a bare version string so an unrelated
-# "2.3.5" somewhere in a prompt cannot be read as this pin.
-PINNED_WITH_IMAGE = {
-    "CRG_VERSION": re.compile(r'^\s*CRG_VERSION:\s*"?([^"\s]+)"?\s*$', re.M),
-}
 # Matches the invocation, not a mention. Anchored at the start of a line
 # (after optional env-var prefixes, which is how the pre-push hook calls it),
 # so `echo "python3 scripts/check-workflows.py"`, a comment naming the script
@@ -196,9 +167,8 @@ SCRIPT_INVOCATION = re.compile(
 GUARD_LITERAL = re.compile(r'^\s*PNPM_BOOTSTRAP_VERSION:\s*"([^"]+)"', re.MULTILINE)
 
 # The GitHub contents API, retried and authenticated. This runs in `guard`,
-# the ONE required status check on main, and a hard failure there blocks even
-# pr-merge.yml's bot merge (github-actions[bot] is not an admin, so it cannot
-# bypass protection). Hard-on-CI is still right — "could not check" must not
+# the ONE required status check on main, and a hard failure there blocks every
+# merge. Hard-on-CI is still right — "could not check" must not
 # read as "checked" — but it must not be one-shot: a rate-limit or a blip would
 # otherwise wedge the repo rather than raise a red advisory check.
 FETCH_ATTEMPTS = 3
@@ -538,9 +508,8 @@ def pnpm_pin_drift(files):
 # The two repo settings the versioning rule in CLAUDE.md now rests on. Neither
 # lives in a file, which is exactly why they are asserted here: the rule "put
 # the bump token in the PR title" is single-valued only while the squash subject
-# comes from the PR title, and on the HUMAN merge path nothing passes
-# `--subject` -- `merge-on-approval.yml` is unreachable for a human PR since
-# pr-checks.yml gated the CI review to dependabot[bot]. With GitHub's default
+# comes from the PR title, and on the human merge path nothing passes
+# `--subject`. With GitHub's default
 # COMMIT_OR_PR_TITLE a one-commit PR lands the COMMIT's subject, so a #minor
 # typed only in the title is dropped and a patch is cut, silently, on a release
 # that reaches every caller.
@@ -557,9 +526,7 @@ MERGE_SETTINGS_JOB_IF = "github.event_name == 'push'"
 MERGE_SETTINGS_EXPECTED = {
     "squash_merge_commit_title": "PR_TITLE",
     "allow_rebase_merge": False,
-    # Without squash the other two say nothing -- and this is the merge method
-    # merge-on-approval.yml defaults to, so a repo with it off cannot land a
-    # bot merge at all.
+    # Without squash the other two say nothing.
     "allow_squash_merge": True,
 }
 
@@ -654,8 +621,7 @@ def merge_settings_drift(files):
         # scoping above rejects an inherited flag and nothing else, so three
         # ordinary edits would leave this function green while the leg reads
         # nothing: swapping the job's `if:` to workflow_dispatch or adding a
-        # paths filter to on.push (pr-checks.yml carries one, so it reads as
-        # house style) -- silent, the job simply stops being reached on the
+        # paths filter to on.push (it reads as an innocent tidy-up) -- silent, the job simply stops being reached on the
         # merges that matter; and cutting `contents: write` back to the repo
         # default as an obvious least-privilege tidy-up, which per the
         # measurement above turns the three keys ABSENT and reds main on every
@@ -773,61 +739,6 @@ def merge_settings_drift(files):
     return problems
 
 
-def runner_image_pin_drift(files, dockerfile="runner-image/Dockerfile"):
-    """Cross-file: a version pinned in a workflow AND in the runner image.
-
-    A workflow that installs a tool the runner image also bakes carries a
-    second copy of that tool's version. Nothing errors when the two drift —
-    the ARC pools and the GitHub-hosted runners simply run different builds of
-    it, and the symptom is "the review agent got worse on one runner type",
-    which nobody traces back to a version literal. That is the same silent
-    shape the guard in merge-on-approval.yml and the pnpm three-way agreement
-    exist to close, so it gets the same treatment: assert it statically rather
-    than leave a comment asking the next reader to remember.
-
-    Absent Dockerfile is not a finding — a checkout without it (a fixture
-    tree, a consumer vendoring only the workflows) has nothing to disagree
-    with. A literal present in the workflow with no matching ARG IS one: that
-    is the shape where the Dockerfile stopped installing the tool and the
-    workflow's pin became a lie nothing reads.
-    """
-    problems = []
-    if not os.path.exists(dockerfile):
-        return problems
-
-    with open(dockerfile) as fh:
-        docker = fh.read()
-
-    for arg, pattern in PINNED_WITH_IMAGE.items():
-        arg_match = re.search(rf"^ARG\s+{re.escape(arg)}=(\S+)\s*$", docker, re.M)
-        for path in files:
-            with open(path) as fh:
-                text = fh.read()
-            found = pattern.findall(text)
-            if not found:
-                continue
-            if arg_match is None:
-                problems.append(
-                    f"{path}: pins {arg}={found[0]} but {dockerfile} declares "
-                    f"no ARG {arg}. Either the image stopped installing it — "
-                    f"in which case the workflow is the only installer and the "
-                    f"comment claiming a second copy is wrong — or the ARG was "
-                    f"renamed and this pin now tracks nothing."
-                )
-                continue
-            want = arg_match.group(1).strip('"')
-            for got in found:
-                if got != want:
-                    problems.append(
-                        f"{path}: pins {arg}={got} but {dockerfile} bakes "
-                        f"{want}. Move both together. Nothing fails when these "
-                        f"drift: the hosted runners install {got} and the ARC "
-                        f"pools already carry {want}, and the only symptom is "
-                        f"two runner types quietly behaving differently."
-                    )
-    return problems
-
-
 CLUSTER_WORKFLOWS = {"deploy-k8s.yml", "deploy-helm.yml"}
 
 
@@ -931,7 +842,6 @@ def main():
             found.append(f"{path}: YAML parse error: {exc}")
 
     found.extend(pnpm_pin_drift(files))
-    found.extend(runner_image_pin_drift(files))
     found.extend(arc_runner_defaults(files))
     found.extend(merge_settings_drift(files))
 

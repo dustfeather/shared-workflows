@@ -81,15 +81,6 @@ but not accepted on the installation — re-check the App page.
    ```
    Helm reuses the existing values (App secret, config URL, replica
    counts, tolerations) and merges in the image + pull secret.
-5. Per caller repo, opt the workflow into the pre-baked binaries:
-   ```yaml
-   uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v6
-   with:
-     path-to-bun: /usr/local/bin/bun
-     path-to-claude: /usr/local/bin/claude
-   ```
-   Don't set these until that scale set has been migrated to the new
-   image, or the action will try to use a binary that's not there.
 
 ## Cross-org pulls (ITGuys-RO)
 

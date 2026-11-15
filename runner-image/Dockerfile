@@ -1,9 +1,10 @@
-# Pre-baked ARC self-hosted runner image. Carries the tooling needed by
-# `claude-code-review.yml` and the other reusable workflows in this repo,
-# AND the generic in-cluster-deploy tooling (kubectl, envsubst) that scale
-# sets use to `kubectl apply` manifests against the cluster they run in
-# (e.g. ITGuys-RO/invest's trader-deploy.yml). It is the standard runner
-# image for both the review workflows and in-cluster CI deploys.
+# Pre-baked ARC self-hosted runner image. Carries the tooling needed by the
+# reusable workflows in this repo and by callers' own workflows (e.g.
+# anthropics/claude-code-action in itguys.ro), AND the generic
+# in-cluster-deploy tooling (kubectl, envsubst) that scale sets use to
+# `kubectl apply` manifests against the cluster they run in (e.g.
+# ITGuys-RO/invest's trader-deploy.yml). It is the standard runner image for
+# both CI jobs and in-cluster CI deploys.
 #
 # Layered on top of the upstream ARC runner image so the `runner` user,
 # `/home/runner/run.sh` entrypoint, and `externals/` dir stay intact.
@@ -42,16 +43,6 @@
 #     refresh-badges workflow; PyJWT+cryptography cover GitHub App / JWT
 #     signing flows from Python — cheap enough to keep in the shared
 #     image so any future Python-using workflow gets them for free).
-#   - code-review-graph: structural code-graph CLI + MCP server consumed by
-#     claude-code-review.yml so the review agent gets blast-radius / impact
-#     context (its `serve` is wired into the action via `--mcp-config`).
-#   - pr-review-toolkit@claude-plugins-official (Claude Code plugin), baked
-#     into /home/runner/.claude/plugins so claude-code-review.yml can fan the
-#     standard review track out to its specialist subagents
-#     (pr-review-toolkit:code-reviewer / silent-failure-hunter /
-#     pr-test-analyzer). Baked rather than installed per job: declaring the
-#     plugin in settings.json alone does NOT install it, and a per-job install
-#     would re-clone the marketplace repo on every review.
 #   - Pre-warmed Bun install cache for anthropics/claude-code-action@v1's
 #     own runtime deps (~140 packages incl. @anthropic-ai/claude-agent-sdk,
 #     @modelcontextprotocol/sdk, octokit), so the per-job
@@ -62,10 +53,9 @@
 #   - Playwright chromium system deps (`playwright install-deps chromium`) and
 #     faketime. The browser binary is still downloaded per job.
 #
-# bun and claude are on PATH (/usr/local/bin) for callers pinned to an ARC pool.
-# claude-code-review.yml no longer passes path_to_bun_executable /
-# path_to_claude_code_executable (dropped in v8), so the action finds them via
-# PATH there and installs its own on hosted runners.
+# bun and claude are on PATH (/usr/local/bin) for callers pinned to an ARC pool
+# that run anthropics/claude-code-action in their own workflows: the action
+# finds them via PATH there and installs its own on hosted runners.
 
 ARG BASE_TAG=latest
 FROM ghcr.io/actions/actions-runner:${BASE_TAG}
@@ -347,19 +337,6 @@ checks = {'jsonschema': (jsonschema.__version__, os.environ['EXP_JSONSCHEMA']), 
 bad = {n: got for n, (got, exp) in checks.items() if got != exp}; \
 sys.exit('VERSION MISMATCH (Debian copy shadowing pip install?): %s' % bad) if bad else None"
 
-# code-review-graph: parses a repo into a structural graph and serves it over
-# MCP. claude-code-review.yml builds the graph (`code-review-graph build`) and
-# registers `code-review-graph serve` with the action via `--mcp-config`, so the
-# review agent can query blast radius / impact / review context instead of
-# re-reading the whole diff. Pinned so image rebuilds are reproducible; bump to
-# adopt a newer release. Separate RUN from the pinned-libs block above because
-# its dependency closure (tree-sitter parsers, fastmcp, networkx) is unrelated.
-ARG CRG_VERSION=2.3.5
-RUN set -eux; \
-    python -m pip install --no-cache-dir --break-system-packages \
-        "code-review-graph==${CRG_VERSION}"; \
-    code-review-graph --version
-
 # Playwright chromium system deps + faketime. ARC pods are ephemeral, so every
 # job was apt-installing ~85 packages (82 MB) via `playwright install
 # --with-deps`. Only system deps are baked here; the browser binary itself is
@@ -397,29 +374,3 @@ RUN set -eux; \
     cd /tmp/cca; \
     bun install --production; \
     rm -rf /tmp/cca
-
-# Bake the pr-review-toolkit plugin (Anthropic's official marketplace) into
-# the runner's ~/.claude so claude-code-review.yml's standard track can
-# dispatch its specialist subagents. Runs as `runner` deliberately: plugin
-# state is per-$HOME, and the job runs as `runner`.
-#
-# Three non-obvious constraints, each verified rather than assumed:
-#   - The marketplace source MUST be the full https:// URL. The `owner/repo`
-#     shorthand resolves to `git@github.com:` and the clone dies on any host
-#     without an SSH key — which is every CI runner.
-#   - `install` needs `-y`: without a TTY it otherwise refuses the
-#     marketplace-declared-command confirmation.
-#   - Declaring the plugin in settings.json (`enabledPlugins` /
-#     `extraKnownMarketplaces`) does NOT install it; Claude Code reads those
-#     keys but performs no fetch. The install has to actually run.
-#
-# The install writes both the plugin cache and the `enabledPlugins` /
-# `extraKnownMarketplaces` keys into /home/runner/.claude/settings.json.
-# claude-code-action shallow-merges its own `settings:` input over that file
-# ({...existing, ...input}), and that input only carries `hooks`, so the
-# plugin keys survive. If a caller ever passes those keys itself, its value
-# wins — which is the intended precedence.
-RUN set -eux; \
-    claude plugin marketplace add https://github.com/anthropics/claude-plugins-official; \
-    claude plugin install pr-review-toolkit@claude-plugins-official -y; \
-    claude plugin list | grep -q 'pr-review-toolkit@claude-plugins-official'

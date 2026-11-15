@@ -4,7 +4,7 @@
 # bytes that ship, and cannot drift from an edit.
 #
 # Refuses rather than guesses when the markers are absent. Anchoring on a line
-# of the block's own logic is what the bump-token guard did, and it made that
+# of the block's own logic is what an earlier guard's extractor did, and it made that
 # line the one thing the suite could not change: mutating it deleted the anchor
 # and the slice silently matched something else entirely.
 #

@@ -18,8 +18,8 @@ cd "$(dirname "$0")/../.." || exit 1
 
 # Portable to bash 3.2 on purpose: read -r in a while loop rather than
 # mapfile (4.0), and the ${out#*"$needle"} substring test below rather than
-# [[ == * ]] with ${needle@Q} (4.4) -- the forms tests/guard/run.sh and
-# tests/pnpm-guard/run.sh already use. The pre-push hook declares this suite's
+# [[ == * ]] with ${needle@Q} (4.4) -- the forms tests/pnpm-guard/run.sh
+# already uses. The pre-push hook declares this suite's
 # dependency as python3 alone, and on bash 3.2 mapfile is simply not found, so
 # SLICED never gets assigned and `set -u` kills the script at ${#SLICED[@]}:
 # the push aborts with "SLICED: unbound variable", which reads as a broken

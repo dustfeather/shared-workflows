@@ -1,21 +1,15 @@
 name: Guard tests
 
-# The bump-token guard in merge-on-approval.yml is shell inside a `run:` block,
-# in the one path this repo has with no retry: a nonzero exit after the merge
-# costs the release tag outright. `uses:` resolves through GitHub, so the guard
-# cannot be exercised from a local checkout — the suite extracts the block
-# verbatim from the shipped YAML and runs it against a stubbed `gh`.
+# Guard blocks in the reusable workflows are shell inside `run:` blocks, and
+# `uses:` resolves through GitHub, so they cannot be exercised from a local
+# checkout. Each suite extracts its block verbatim from the shipped YAML and
+# runs it against stubs.
 #
 # It also runs actionlint over every workflow in the repo, so the shell in a
-# `run:` block is linted before it ships to a caller rather than after. Both
+# `run:` block is linted before it ships to a caller rather than after. All
 # checks live in the SAME `guard` job on purpose: `guard` is the one required
 # status check on `main`, so a step added here is enforced immediately, while a
 # new job would report and gate nothing until branch protection is edited.
-#
-# Deliberately its OWN workflow rather than a job in pr-checks.yml. That file
-# names itself in its own `paths-ignore`, so a PR touching only it creates no
-# run object at all and cannot land itself. A separate file has no such
-# constraint and can be changed in an ordinary PR.
 on:
   push:
     branches: [main]
@@ -33,18 +27,8 @@ jobs:
     runs-on: arc-df-shared-workflows
     steps:
       - uses: actions/checkout@v7
-      - name: Extract the guard from the YAML and run both suites
-        # Both suites re-extract before running, so this can never pass against
-        # a stale copy. run.sh covers the shell against a stubbed `gh` that
-        # asserts argv shape; jqtest.sh covers the `--jq` program against real
-        # jq, which the stub is structurally blind to because the program rides
-        # inside argv.
-        run: bash tests/guard/all.sh
-
-      # The pnpm guard is a separate slice with its own extractor, so it gets
-      # its own step rather than joining all.sh: a failure here means the
-      # pnpm-version branch logic moved, which is a different diagnosis from a
-      # bump-token guard failure and should not arrive wearing its name.
+      # The pnpm guard is a slice with its own extractor; a failure here means
+      # the pnpm-version branch logic moved.
       #
       # extract.sh also asserts the three shipped copies are byte-identical, so
       # this step fails on drift between the workflows as well as on a broken
@@ -54,8 +38,8 @@ jobs:
         run: bash tests/pnpm-guard/run.sh
 
       # Its own step for the same reason the pnpm guard has one: a failure here
-      # means the cache-glob logic moved, not that a bump-token assertion
-      # broke. The block writes setup-node's `cache-dependency-path`, which
+      # means the cache-glob logic moved, not that the pnpm guard broke. The
+      # block writes setup-node's `cache-dependency-path`, which
       # FAILS THE STEP rather than skipping when nothing resolves, so it is the
       # one piece of this PR that cannot be proven by reading. extract.sh
       # derives the set of copies from the markers and cross-checks it against
@@ -66,8 +50,8 @@ jobs:
 
       # check-workflows.py runs in this same job below and is what makes its
       # assertions binding fleet-wide. That is also why it needs cases of its
-      # own: a false positive in it reds the one required check on main and
-      # blocks the bot merge on every PR at once, and two of its regexes have
+      # own: a false positive in it reds the one required check on main for
+      # every PR at once, and two of its regexes have
       # already shipped broken here -- one double-escaped and matched nothing,
       # one matched prose instead of `uses:` lines. A clean tree passing proves
       # the happy path and nothing else.

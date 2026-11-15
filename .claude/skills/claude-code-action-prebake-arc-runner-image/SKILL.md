@@ -42,7 +42,7 @@ Naive attempts that DON'T help:
 
 All true:
 
-- Caller uses `anthropics/claude-code-action@v1` (or wrapper like `dustfeather/shared-workflows/.github/workflows/claude-code-review.yml`).
+- Caller uses `anthropics/claude-code-action@v1` (directly or through its own reusable wrapper).
 - ARC pool: `helm list -n arc-runners` shows `gha-runner-scale-set` releases; `kubectl get autoscalingrunnerset -A` shows sets on upstream `ghcr.io/actions/actions-runner`.
 - Job logs show wall-clock in `Install Bun` + `@anthropic-ai/claude-code` install.
 
@@ -110,7 +110,7 @@ Image pulled by same pool that builds it. Never build runner image on runners th
 
 ### Step 4 — Wire workflow to pre-baked paths
 
-In reusable review workflow, surface paths as optional inputs:
+In a reusable workflow wrapping the action, surface paths as optional inputs:
 
 ```yaml
 inputs:
@@ -150,7 +150,7 @@ helm -n arc-runners upgrade --reuse-values <release> \
     -f values-override.yaml
 ```
 
-**Critical**: override only `arc-df-*` and forget `arc-itguys-ro*` → ITGuys-RO PRs pay full install cost AND `path-to-*` inputs point at non-existent binaries → review breaks. Roll image override out to every scale set receiving workflow calls with new inputs, or gate input defaults per caller repo.
+**Critical**: override only `arc-df-*` and forget `arc-itguys-ro*` → ITGuys-RO jobs pay full install cost AND `path-to-*` inputs point at non-existent binaries → the job breaks. Roll image override out to every scale set receiving workflow calls with new inputs, or gate input defaults per caller repo.
 
 ### Step 6 — Make image cross-org pullable
 
@@ -175,16 +175,17 @@ Cross-org rollout — shared workflow at `dustfeather/shared-workflows`, caller 
 1. Merge image Dockerfile + build workflow to `dustfeather/shared-workflows`. First push to `main` → `ghcr.io/dustfeather/actions-runner-claude:latest`.
 2. GHCR package settings → switch visibility to **Public**.
 3. For each `arc-df-*` (10+) and `arc-itguys-ro*` (2+) release, `helm upgrade --reuse-values` w/ image override.
-4. In `ITGuys-RO/some-app/.github/workflows/review.yml`:
+4. In the caller's own workflow (e.g. `ITGuys-RO/some-app/.github/workflows/agent.yml`):
    ```yaml
    jobs:
-     review:
-       uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v6
-       with:
-         path-to-bun: /usr/local/bin/bun
-         path-to-claude: /usr/local/bin/claude
-       secrets:
-         CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+     agent:
+       runs-on: arc-itguys-ro
+       steps:
+         - uses: anthropics/claude-code-action@v1
+           with:
+             path_to_bun_executable: /usr/local/bin/bun
+             path_to_claude_code_executable: /usr/local/bin/claude
+             # plus the action's auth input
    ```
 
 ## Notes

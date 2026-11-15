@@ -122,9 +122,8 @@ jobs:
     # caller asked for -- including `v5`.
     #
     # v6 does not exist until this PR's own merge cuts it, so rolling them here
-    # is a bet on the `#major` surviving into the squash subject. This repo
-    # merges through frozen `@v5` merge-on-approval, which passes no
-    # `--subject` and carries no bump guard, so nothing checks that bet. Lose
+    # is a bet on the `#major` surviving into the squash subject, and nothing
+    # in the merge path checks that bet. Lose
     # it and tag-release cuts a PATCH, which re-points floating `v5` onto this
     # tree -- and then every caller on `release-extension.yml@v5` resolves
     # `node-test.yml@v6`, which does not exist: `startup_failure`, zero jobs,
