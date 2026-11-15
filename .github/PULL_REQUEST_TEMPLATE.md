@@ -13,8 +13,6 @@ reviewer assess that blast radius.
 
 - [ ] `publish-chrome.yml` consumers (filelist-ext, series-auto-skip, discord-purge, uninsta)
 - [ ] `publish-firefox.yml` consumers (same four)
-- [ ] `claude-code-review.yml` consumers (every repo with the shim)
-- [ ] `claude.yml` consumers (every repo with the shim)
 - [ ] None — this PR only touches docs / tests / repo metadata
 
 ## Compatibility

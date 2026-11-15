@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """Fixture cases for the cross-file checks in scripts/check-workflows.py.
 
-Two of them: pnpm_pin_drift() and runner_image_pin_drift(). Both compare a
-literal in a workflow against a second copy of the same value living in another
-file, both are silent when they drift, and both ride the same required check.
+Chiefly pnpm_pin_drift(), which compares a literal in a workflow against a
+second copy of the same value living in another file and is silent when they
+drift; also arc_runner_defaults() and merge_settings_drift().
 
-Why this exists: that function rides on the `guard` job, which is the one
-required status check on `main`, so a false positive in it reds every PR in
-the repo at once and blocks the bot merge -- the same no-retry path tests/guard/
-exists for. Until now it asserted only itself: the clean tree passing proved
+Why this exists: these functions ride on the `guard` job, which is the one
+required status check on `main`, so a false positive in one reds every PR in
+the repo at once. Until now it asserted only itself: the clean tree passing proved
 the happy path and nothing else, and two of its regexes have already shipped
 broken in this repo (one double-escaped and matched nothing; one matched prose
 instead of `uses:` lines). A regex that silently stops matching is exactly the
@@ -356,79 +355,8 @@ case("a mention is not an invocation, so no env finding",
      "!effective env")
 
 
-# --- runner_image_pin_drift() --------------------------------------------
-# Separate harness because this check takes a second file that is NOT a
-# workflow, and because a missing one is a legitimate no-finding rather than
-# an error -- the distinction the cases below exist to pin down.
-def image_case(name, workflows, dockerfile, expect):
-    """dockerfile: the ARG file's contents, or None to leave it absent."""
-    global passed, failed
-    with tempfile.TemporaryDirectory() as d:
-        paths = []
-        for fname, body in workflows.items():
-            p = pathlib.Path(d) / fname
-            p.write_text(body)
-            paths.append(str(p))
-        docker = str(pathlib.Path(d) / "Dockerfile")
-        if dockerfile is not None:
-            pathlib.Path(docker).write_text(dockerfile)
-        problems = cw.runner_image_pin_drift(sorted(paths), dockerfile=docker)
-    joined = " | ".join(problems)
-    ok = (not problems) if expect is None else (expect in joined)
-    if ok:
-        print(f"PASS  {name}")
-        passed += 1
-    else:
-        print(f"FAIL  {name}\n      expected: {expect!r}\n      got: {joined or '(no findings)'}")
-        failed += 1
-
-
-def crg_workflow(literal='"2.3.5"', prose=None):
-    out = ["jobs:", "  review:", "    runs-on: ubuntu-latest", "    steps:"]
-    if literal is not None:
-        out += [
-            "      - name: Ensure code-review-graph is installed",
-            "        env:",
-            f"          CRG_VERSION: {literal}",
-            "        run: pip install code-review-graph",
-        ]
-    if prose is not None:
-        out += ["      - name: review", "        with:", f"          prompt: {prose}"]
-    return "\n".join(out) + "\n"
-
-
-image_case("agreeing pins: no findings",
-           {"a.yml": crg_workflow()}, "ARG CRG_VERSION=2.3.5\n", None)
-image_case("drifted pins",
-           {"a.yml": crg_workflow(literal='"2.4.0"')}, "ARG CRG_VERSION=2.3.5\n",
-           "pins CRG_VERSION=2.4.0")
-# A checkout without the image -- a fixture tree, or a consumer vendoring only
-# the workflows -- has nothing to disagree with, so it must stay quiet. Getting
-# this wrong reds the one required check for everyone who does not build the
-# image.
-image_case("absent Dockerfile is not a finding",
-           {"a.yml": crg_workflow()}, None, None)
-# The other direction: the image stopped installing it, so the workflow's
-# "second copy" comment is now a lie and the pin tracks nothing.
-image_case("Dockerfile present but the ARG is gone",
-           {"a.yml": crg_workflow()}, "ARG OTHER=1\n",
-           "declares no ARG CRG_VERSION")
-image_case("no literal in any workflow: nothing to compare",
-           {"a.yml": crg_workflow(literal=None)}, "ARG CRG_VERSION=2.3.5\n", None)
-# The anchor is the env KEY, not the version string. This workflow ships a
-# prompt quoting an unrelated 2.4.0; reading that as the pin would fail the
-# required check over prose, which is the shape that has already shipped twice
-# in this file's sibling regexes.
-image_case("a version in prose is not the pin",
-           {"a.yml": crg_workflow(prose="please use 2.4.0 of something else")},
-           "ARG CRG_VERSION=2.3.5\n", None)
-image_case("a quoted ARG value still agrees",
-           {"a.yml": crg_workflow()}, 'ARG CRG_VERSION="2.3.5"\n', None)
-image_case("an unquoted workflow literal still matches",
-           {"a.yml": crg_workflow(literal="2.3.5")}, "ARG CRG_VERSION=2.3.5\n", None)
-
 # --- arc_runner_defaults() -----------------------------------------------
-# Third harness because the exception list is keyed on the BASENAME, so a case
+# Separate harness because the exception list is keyed on the BASENAME, so a case
 # is a filename plus a default, and the fixture has to control both.
 def arc_case(name, fname, default, expect, required=None):
     """default: the `runner` input's default, or None to omit the input.
@@ -718,7 +646,7 @@ merge_case("the enabling job moved off the push event is a finding",
 merge_case("the enabling job with no condition at all is a finding",
            "rather than `if: github.event_name == 'push'`",
            gate_yaml=merge_gate(job_if=None))
-# pr-checks.yml carries a paths-ignore, so adding one here reads as house style.
+# A paths filter reads as an innocent tidy-up, which is why it is pinned here.
 merge_case("a paths filter on the push trigger is a finding",
            "`on.push.paths` filters the event",
            gate_yaml=merge_gate(push=("  push:", "    paths: ['**.yml']")))

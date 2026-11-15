@@ -2,7 +2,7 @@
 
 ## Goal
 
-One source of truth for reusable GitHub Actions workflows plus the self-hosted runner container image used across every repo under the account — Claude Code review, browser-extension publishing, and the shared Node/Python CI gates. Callers keep a tiny shim; the central repo holds all the logic.
+One source of truth for reusable GitHub Actions workflows plus the self-hosted runner container image used across every repo under the account: browser-extension publishing, deploys, and the shared Node/Python CI gates. Callers keep a tiny shim; the central repo holds all the logic.
 
 ## Stack
 
@@ -18,20 +18,17 @@ Reusable workflows under `.github/workflows/`:
 
 - `node-test.yml` — Node audit / lint / typecheck / test / opt-in build (auto-detects package manager, defaults Node 24).
 - `python-test.yml` — ruff lint + format check + pytest (defaults Python 3.14).
-- `claude-code-review.yml` — automatic PR review (Claude Code Action; splits Dependabot vs human PR tracks).
-- `claude.yml` — interactive `@claude` mention handler for issues/PR comments/reviews.
-- `dependabot-auto-merge.yml` — auto-merge Dependabot PRs after approval (`auto`/`direct` modes).
 - `publish-chrome.yml` — Chrome Web Store publish.
 - `publish-firefox.yml` — Mozilla Add-ons (AMO) publish.
 - `tag-release.yml` — auto-tags every push to `main`, re-points the floating `vN` tag (patch by default; `#minor`/`#major` tokens in the commit subject bump larger).
 - `runner-image.yml` / `refresher-image.yml` — build + push the runner image and the GHCR-pull refresher image.
-- `pr-checks.yml` — the repo's own PR gate.
+- `guard-tests.yml`: the repo's own PR gate (guard suites, `check-workflows.py`, actionlint).
 
 Other layout: `runner-image/` (the pre-baked runner Dockerfile), `k8s/` (ARC scale-set image override + `ghcr-pull-refresher/` CronJob).
 
 ## Deploy
 
-The reusable workflows are **consumed by other repos** via a shim that pins `@v1` and passes secrets (`secrets: inherit` for same-owner `dustfeather/*` callers; explicit `ANTHROPIC_API_KEY` pass for cross-owner `ITGuys-RO/*` callers).
+The reusable workflows are **consumed by other repos** via a shim that pins `@v1` and passes secrets (`secrets: inherit` for same-owner `dustfeather/*` callers; explicit named-secret pass (e.g. `NPM_TOKEN`) for cross-owner `ITGuys-RO/*` callers).
 
 The runner images run **IN-CLUSTER** — ARC scale sets on the k3s cluster, with each scale set's Helm release overridden to point its `runner` container at `ghcr.io/dustfeather/actions-runner-claude:latest` (`k8s/runner-scale-set-image-override.yaml`). A `ghcr-pull-refresher` CronJob mints a GHCR pull credential from the `github-app-dustfeather` App every 30 min so the image can stay private.
 
@@ -39,7 +36,7 @@ Runner images hosted on [Homelab](https://github.com/ITGuys-RO/k3s-cluster/blob/
 
 ## Status
 
-Active. Current work is on branch `feat/standard-track-formal-review` (`claude-code-review.yml` emitting a formal approve / request-changes verdict on the standard track). `main` recently upgraded the review model from claude-opus-4-7 to 4-8.
+Active. No workflow here reviews or merges PRs: review is local, merges are by hand.
 
 ## Tasks
 

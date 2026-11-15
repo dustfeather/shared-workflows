@@ -58,8 +58,8 @@ for owner in "${OWNERS[@]}"; do
      --jq '.[] | select(.defaultBranchRef != null)
            | "\(.nameWithOwner)\t\(.defaultBranchRef.name)"' >> "$WORK/repos"
 done
-# The library repo's own pins are out of scope: pr-checks.yml names itself in
-# its own paths-ignore, so its bump needs a direct push, handled separately.
+# The library repo's own intra-repo pins are out of scope: they are bumped by
+# hand, separately.
 grep -v "^$LIB_OWNER/$LIB_REPO	" "$WORK/repos" > "$WORK/repos.f" || true
 mv "$WORK/repos.f" "$WORK/repos"
 echo "repos to inspect: $(wc -l < "$WORK/repos")"

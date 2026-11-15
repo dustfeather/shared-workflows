@@ -3,8 +3,8 @@
 [![Tag release](https://github.com/dustfeather/shared-workflows/actions/workflows/tag-release.yml/badge.svg)](https://github.com/dustfeather/shared-workflows/actions/workflows/tag-release.yml)
 
 Reusable GitHub Actions workflows for cross-cutting CI across every repo
-under this account. One source of truth for Claude Code review, browser-
-extension publishing, and anything else that recurs.
+under this account. One source of truth for Node/Python CI gates, deploys,
+browser-extension publishing, and anything else that recurs.
 
 ## Workflows
 
@@ -95,28 +95,10 @@ multipart-split pattern for `release_notes` (AMO rejects translatable
 fields combined with multipart source uploads), and the same
 deterministic stagger.
 
-### `dependabot-auto-merge.yml` — auto-merge Dependabot PRs
-
-Reusable workflow that merges a Dependabot PR after Claude (or any
-trusted reviewer) approves it. Two modes:
-
-- `mode: auto` (default) — calls `gh pr merge --auto`. Pair with a
-  `pull_request_review` trigger in your shim. Requires GitHub's
-  auto-merge feature (Pro+ for private repos, Free only for public).
-- `mode: direct` — calls `gh pr merge` immediately after CI succeeds.
-  Pair with a `workflow_run` trigger watching your CI workflow. For
-  Free private repos where `--auto` isn't available (see
-  `github-private-repo-auto-merge-workaround` skill).
-
-Auto-detects the merge method from the repo's allowed methods (priority:
-squash > rebase > merge); override via `merge-method:`.
-
 ### Recommended PR-checks shape
 
-For the cleanest gate (review skipped if tests/build/CodeQL fail, and
-in-flight reviews cancelled when the PR closes/merges), each caller
-combines `node-test.yml` + `claude-code-review.yml` into one workflow
-with `needs:` ordering, the `closed` trigger, and per-job `if:` gates:
+Each caller runs `node-test.yml` from one PR workflow, with the `closed`
+trigger and an `if:` gate so a merge or close cancels the in-flight run:
 
 ```yaml
 name: PR checks
@@ -124,10 +106,8 @@ on:
   pull_request:
     # `closed` is here so a merge fires a same-concurrency-group run that
     # cancels the in-flight one (cancel-in-progress: true). The new run
-    # itself does no work — both jobs skip via the if: gate below.
+    # itself does no work: the job skips via the if: gate below.
     types: [opened, synchronize, reopened, closed]
-    paths-ignore:
-      - '.github/workflows/pr-checks.yml'
 
 permissions: { contents: read }
 concurrency:
@@ -138,47 +118,14 @@ jobs:
   tests:
     if: github.event.action != 'closed'
     permissions: { contents: read }
-    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v6
+    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v10
     # every gate is on by default; opt out per gate, e.g.
     # with:
     #   run-build: false
-  review:
-    if: github.event.action != 'closed'
-    needs: tests   # review skips if tests fail
-    permissions:
-      contents: read
-      pull-requests: write
-      issues: read
-      id-token: write
-    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v6
-    secrets: inherit  # use explicit pass for cross-owner — see "Cross-owner callers"
 ```
 
-`needs: tests` gates review on tests/build passing. The central review
-workflow itself adds a cheap bash gate that skips when CodeQL has
-already failed (no agent spin-up, no Claude tokens) — treating
-IN_PROGRESS as "proceed" so reviews aren't blocked waiting for CodeQL.
-Adding `closed` to the trigger types + the `if: != 'closed'` gates on
-each job means a PR being merged or closed mid-review cancels the
-in-flight run via the shared concurrency group — no Claude tokens
-spent on a review whose PR is no longer open.
-
-### `claude-code-review.yml` — automatic PR review
-
-Runs Claude Code Action on every PR (after a trusted-actor / allowed-bot
-gate). Uses a structured prompt that splits dependabot bumps from human PRs:
-
-- **Dependabot track**: classifies the bump (patch/minor/major), checks the
-  changelog for breaking changes, approves or requests changes via
-  `gh pr review` based on the rules.
-- **Standard track**: leaves inline comments + a top-level summary; never
-  auto-approves human PRs.
-
-### `claude.yml` — interactive `@claude` mention
-
-Picks up `@claude` mentions in issues, issue comments, PR review comments,
-and PR reviews from a trusted actor and hands the conversation to Claude
-Code Action.
+No workflow here reviews or merges PRs: review the diff locally before the
+push, and merge by hand.
 
 ### `deploy-cloudflare.yml` — deploy one Worker with wrangler
 
@@ -571,7 +518,7 @@ logged.
     secret-name: social-update-secrets
   secrets:
     SECRET_LITERALS: |
-      ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
+      API_KEY=${{ secrets.API_KEY }}
 ```
 
 `GHCR_PULL_PAT` is only needed when `ghcr-pull-secret` is set, i.e. the
@@ -796,47 +743,8 @@ with `match_subject_prefix`.
 
 Each calling repo has a tiny shim. The shim handles trigger configuration
 (which can't be inside a `workflow_call` workflow); the central workflow
-handles all the logic.
-
-### `.github/workflows/claude-code-review.yml` (shim)
-
-```yaml
-name: Claude Code Review
-on:
-  pull_request:
-    types: [opened, synchronize]
-    # Avoid the claude-code-action self-modify validation guard tripping
-    # on PRs that change this very file. Keep the path narrow — broader
-    # filters like '.github/**' would also skip review on workflow PRs
-    # that are unrelated to this file.
-    paths-ignore:
-      - '.github/workflows/claude-code-review.yml'
-
-jobs:
-  review:
-    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v6
-    secrets: inherit
-```
-
-### `.github/workflows/claude.yml` (shim)
-
-```yaml
-name: Claude Code
-on:
-  issue_comment:
-    types: [created]
-  pull_request_review_comment:
-    types: [created]
-  issues:
-    types: [opened, assigned]
-  pull_request_review:
-    types: [submitted]
-
-jobs:
-  claude:
-    uses: dustfeather/shared-workflows/.github/workflows/claude.yml@v6
-    secrets: inherit
-```
+handles all the logic. See "Recommended PR-checks shape" above for the
+`node-test.yml` shim.
 
 ## Secrets
 
@@ -876,26 +784,9 @@ Note this is a *hardening* measure, not a fix for a broken audit: as of
 audit step fails, check for the hang described in issue #24 before suspecting
 credentials.
 
-### Claude — `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`
-
-Each calling repo must have one of `ANTHROPIC_API_KEY` (Console API key,
-billed per token) or `CLAUDE_CODE_OAUTH_TOKEN` (subscription token) set,
-either as a repository secret or inherited from an organization secret. The
-shim then needs to pass it through. When both reach the workflow,
-`ANTHROPIC_API_KEY` wins and the OAuth token is not sent. Neither set: the
-action fails with `Either ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN is
-required`. Dependabot-triggered runs read the separate Dependabot secret
-store (`gh secret set --app dependabot`), so the key goes there too.
-
-Optional `ANTHROPIC_WORKSPACE_ID` secret: with `ANTHROPIC_API_KEY`, `claude.yml`
-and `claude-code-review.yml` send it as the `anthropic-workspace-id` header
-through Claude Code's `ANTHROPIC_CUSTOM_HEADERS`. Required for a key that can
-act on several workspaces; a workspace-scoped key needs none. Pass it like the
-key (`secrets: inherit`, or explicitly from a cross-owner caller).
-
 **Reusable workflows run in the caller's context with the caller's secrets.**
 The central repo's secrets are not visible to callers; each caller pays for
-its own Claude usage with its own token.
+its own usage with its own credentials.
 
 ### Same-owner callers — `secrets: inherit` works
 
@@ -904,8 +795,8 @@ When the calling repo is owned by the same account as `shared-workflows`
 
 ```yaml
 jobs:
-  review:
-    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v6
+  tests:
+    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v10
     secrets: inherit
 ```
 
@@ -917,51 +808,30 @@ org-level — into the called workflow.
 When the caller lives under a **different owner** (e.g. an `ITGuys-RO/*`
 repo calling `dustfeather/shared-workflows`), `secrets: inherit` does NOT
 reliably pass **org-level secrets with "selected" visibility** across the
-owner boundary. You'll see this error from the called workflow's first
-job:
+owner boundary. For a required secret you'll see this error from the called
+workflow's first job:
 
 ```
-Error when evaluating 'secrets'. .github/workflows/claude-code-review.yml
-(Line: N, Col: M): Secret CLAUDE_CODE_OAUTH_TOKEN is required, but not
-provided while calling.
+Error when evaluating 'secrets'. .github/workflows/<file>.yml
+(Line: N, Col: M): Secret X is required, but not provided while calling.
 ```
 
-The fix is to pass the secret explicitly. The reference is resolved in
-the **caller's** context (where the org secret IS visible to the repo)
-and forwarded as a named secret:
+An optional secret (such as `NPM_TOKEN`) fails silently instead: it arrives
+empty and the step it gates is skipped. The fix is to pass the secret
+explicitly. The reference is resolved in the **caller's** context (where the
+org secret IS visible to the repo) and forwarded as a named secret:
 
 ```yaml
 jobs:
-  review:
-    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v6
+  tests:
+    uses: dustfeather/shared-workflows/.github/workflows/node-test.yml@v10
     secrets:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
 
 This works in both cases (same-owner and cross-owner), so when in doubt,
 prefer the explicit form. `inherit` is just a convenience shortcut for
 the same-owner case.
-
-## Configuration
-
-Both workflows accept optional `with:` inputs:
-
-| Input | Workflow | Default | Purpose |
-|-------|----------|---------|---------|
-| `trusted-actors` | both | `dustfeather` | Comma-separated GitHub actors allowed to trigger |
-| `allowed-bots` | review | `dependabot[bot]` | Bots whose PRs trigger reviews |
-| `show-full-output` | review | `true` | Surface every tool call in the action log |
-
-Example (private repo where another teammate should also be able to invoke):
-
-```yaml
-jobs:
-  review:
-    uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v6
-    with:
-      trusted-actors: "dustfeather,collaborator-handle"
-    secrets: inherit
-```
 
 ## Versioning
 
@@ -974,32 +844,12 @@ bumped automatically** — a major bump can break `@vN` callers, so it only
 happens when you ask for it. Request a larger bump with a token — `#minor`
 or `#major` (largest wins; `#patch` is the explicit form of the default).
 Where the token goes depends on how the change lands: **in the PR title**
-when it lands through a PR, because `merge-on-approval.yml` squashes with
-`--subject "<the PR title>"` and that title becomes the subject of the one
-commit that reaches `main`; **on the commit subject** when you push straight
-to `main`. A token left on a branch commit's subject ends up in the squash
-commit's body, where the scan does not look — the merge workflow refuses
-that merge rather than cutting a quiet patch.
-
-**A pull request with more than 250 commits is refused, not merged.** This is
-new in `v6` and it applies on the DEFAULT settings (`merge-method: squash`,
-`mode: auto`), so a caller that overrides neither is affected. To decide the
-bump, `merge-on-approval.yml` has to read the subject of every commit on the
-PR — and GitHub's pull-request commits endpoint stops at 250 however far it is
-paginated. A bump token on commit 251 would be silently invisible, which is the
-exact failure the guard exists to prevent. So it compares the subjects it
-actually read against the PR's own `.commits` total (uncapped — measured at 780
-on a PR whose listing returns 250) and refuses on any shortfall rather than
-deciding a release from a partial list.
-
-**There is no opt-out input.** The refusal cannot be switched off from a
-caller's shim; the remedy is to **merge that PR by hand, or split it**. The
-message names which of three causes it can rule out: the head shrank between
-the two reads (a force-push or a base rebase), truncation at the 250 cap, or a
-push landing between the commit read and the count read. A page that failed
-outright is not one of them — a nonzero `gh api` exits the step before the
-comparison happens. If you maintain a long-running integration branch that
-accumulates hundreds of commits, expect to land it manually.
+when it lands through a PR, because PRs land with a squash merge and the repo
+setting `squash_merge_commit_title` is `PR_TITLE`, so that title becomes the
+subject of the one commit that reaches `main`; **on the commit subject** when
+you push straight to `main`. A token left on a branch commit's subject ends up
+in the squash commit's body, where the scan does not look, and the release
+quietly degrades to a patch.
 
 Pick the bump by what changes for **callers** of these reusable workflows:
 
@@ -1051,3 +901,9 @@ the matching publish job emits a `::warning::` and exits 0 cleanly.
 This repo subsumes the earlier `dustfeather/extension-workflows` (which
 was extension-publish-only). All publish workflows now live here so
 there's one home for shared CI.
+
+v10 removed the automatic Claude review (`claude-code-review.yml`), the
+`@claude` responder (`claude.yml`) and the PR auto-merge workflows
+(`dependabot-auto-merge.yml`, `merge-on-approval.yml`). Callers delete their
+shims for those; review now runs locally before the push and merges are by
+hand.

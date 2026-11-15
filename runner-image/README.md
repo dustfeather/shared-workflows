@@ -3,9 +3,8 @@
 `Dockerfile` here builds a derivative of `ghcr.io/actions/actions-runner`
 with the tooling our reusable workflows need pre-installed: `gh`, `jq`,
 Node, Bun (pinned to the version `anthropics/claude-code-action@v1`
-expects), `@anthropic-ai/claude-code`, and the
-`pr-review-toolkit@claude-plugins-official` Claude Code plugin that
-`claude-code-review.yml`'s standard track fans out to.
+expects) and `@anthropic-ai/claude-code`, for callers that run
+`anthropics/claude-code-action` in their own workflows on an ARC pool.
 
 It also sets `TURBO_TELEMETRY_DISABLED=1` and `DO_NOT_TRACK=1` (a caller's
 workflow-level `env:` does not reach jobs inside a reusable workflow, so
@@ -35,11 +34,6 @@ Bun is installed from the npm registry package `@oven/bun-linux-x64` (tarball
 checked against the registry's sha512 integrity), not from GitHub releases,
 which were returning 504s.
 
-The plugin is baked rather than installed per job because declaring it in
-`settings.json` does not install it — Claude Code reads `enabledPlugins`
-and `extraKnownMarketplaces` but performs no fetch, so a settings-only
-review silently runs without the subagents.
-
 CI builds + pushes it to
 `ghcr.io/dustfeather/actions-runner-claude` on every push to `main` that
 touches `runner-image/**` (see `.github/workflows/runner-image.yml`).
@@ -53,9 +47,7 @@ runner Helm releases will need a pull-secret added.
 The ARC scale-set releases are Helm-managed. Both the `dustfeather`-owned
 runner sets (`arc-df-*`) and the `ITGuys-RO`-owned sets (`arc-itguys-ro`,
 `arc-itguys-ro-degoog-infra`, …) need the override — the image bake is
-useless on any scale set that's still on the upstream runner image, since
-the workflow's `path-to-bun` / `path-to-claude` inputs point at binaries
-that won't be there. For each `autoscalingrunnerset`, override the runner
+useless on any scale set that's still on the upstream runner image. For each `autoscalingrunnerset`, override the runner
 container image in its Helm values:
 
 ```yaml
@@ -80,23 +72,6 @@ pins to the same image — Helm sets both from the same value, so no manual
 edit is needed there. The scale sets in this cluster run `containerMode: {}`
 with a hand-rolled dind sidecar, so that initContainer is not created for
 them and there is nothing to keep in sync.
-
-## Wiring the review workflow
-
-`claude-code-review.yml` exposes two optional inputs that tell
-`claude-code-action@v1` to skip its own Bun and Claude Code installs and
-use the binaries baked into the image:
-
-```yaml
-uses: dustfeather/shared-workflows/.github/workflows/claude-code-review.yml@v6
-with:
-  path-to-bun: /usr/local/bin/bun
-  path-to-claude: /usr/local/bin/claude
-```
-
-Callers running on the upstream `ghcr.io/actions/actions-runner` image
-(or GitHub-hosted runners) should leave them empty — the action will
-install both itself.
 
 ## Keeping the Bun pin honest
 

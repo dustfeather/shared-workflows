@@ -109,12 +109,9 @@ pin removes a freeze someone chose. Report and ask.
 
 ## Excluding shared-workflows itself
 
-This repo's own pins are **not** part of the sweep and the script skips it. They
-need a direct push to `main` for a reason specific to here: `pr-checks.yml` names
-itself in its own `paths-ignore`, so a PR touching only it creates no run object
-at all — no run, no review, no approval, and `pr-merge.yml` triggers on
-`pull_request_review`. It cannot land itself. Bump them separately, by hand, on
-`main`. (That still has to happen on a major — it is just not this script's job.)
+This repo's own intra-repo pins are **not** part of the sweep and the script
+skips it. Bump them separately, by hand. (That still has to happen on a major:
+it is just not this script's job.)
 
 ## Procedure
 
