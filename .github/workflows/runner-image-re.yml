@@ -1,0 +1,96 @@
+name: Build RE runner image
+
+# ghcr.io/<owner>/actions-runner-re: actions-runner-claude (runner-image.yml)
+# plus Rust with the MSVC target, cargo-xwin, Ghidra and rizin. Same shape as
+# runner-image.yml: build into the local daemon, smoke-test the built image,
+# push only the image that passed.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "runner-image-re/**"
+      - ".github/workflows/runner-image-re.yml"
+  schedule:
+    # Weekly, two hours after runner-image.yml's Monday 04:00 rebuild, so the
+    # base it re-resolves below is normally that week's.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One build at a time; every run pushes :latest (see runner-image.yml).
+concurrency:
+  group: runner-image-re
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # GitHub-hosted, like runner-image.yml: an ARC pool may be pulling this
+    # image, so it must not build itself.
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/actions-runner-re
+      BASE: ghcr.io/${{ github.repository_owner }}/actions-runner-claude
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Pin the base by digest, so the build is reproducible and the exact
+      # base is recorded in the image's base.name label.
+      - name: Resolve base image digest
+        id: base
+        run: |
+          set -euo pipefail
+          digest=$(docker buildx imagetools inspect "${BASE}:latest" --format '{{.Manifest.Digest}}')
+          case "$digest" in
+            sha256:*) ;;
+            *) echo "::error::cannot resolve ${BASE}:latest to a digest (got '${digest}')"; exit 1 ;;
+          esac
+          echo "${BASE}:latest -> ${digest}"
+          echo "image=${BASE}@${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Build (load, no push)
+        uses: docker/build-push-action@v7
+        with:
+          context: runner-image-re
+          file: runner-image-re/Dockerfile
+          load: true
+          push: false
+          build-args: |
+            BASE_IMAGE=${{ steps.base.outputs.image }}
+          platforms: linux/amd64
+          provenance: false
+          tags: runner-image-re-smoke:local
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
+
+      # Runs as the image's default user (runner), the one ARC jobs use.
+      - name: Smoke test
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE/runner-image-re/smoke.sh:/tmp/smoke.sh:ro" \
+            --entrypoint bash runner-image-re-smoke:local /tmp/smoke.sh
+
+      - name: Push tested image
+        run: |
+          set -euo pipefail
+          for t in "${IMAGE}:latest" "${IMAGE}:sha-${GITHUB_SHA}"; do
+            docker tag runner-image-re-smoke:local "$t"
+            docker push "$t"
+          done
