@@ -756,6 +756,42 @@ validate-chart:
     upgrade: false
 ```
 
+## Actions
+
+### `.github/actions/anthropic-token` — Anthropic token by workload identity federation
+
+Exchanges the job's GitHub OIDC token for a short-lived Anthropic access token,
+so no API key is stored, and names the newest model of each family at run time.
+Use it for plain Messages API or Agent SDK calls; claude-code-action is not a
+fit, because it reports itself as Claude Code, which API credit does not cover.
+
+```yaml
+permissions:
+  id-token: write
+steps:
+  - id: anthropic
+    uses: dustfeather/shared-workflows/.github/actions/anthropic-token@v9
+    with:
+      federation-rule-id: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}
+      organization-id: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}
+      service-account-id: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}
+      workspace-id: ${{ vars.ANTHROPIC_WORKSPACE_ID }}
+  - run: node call-claude.mjs
+    env:
+      ANTHROPIC_AUTH_TOKEN: ${{ steps.anthropic.outputs.token }}
+      MODEL: ${{ steps.anthropic.outputs.model-sonnet }}
+```
+
+| Output | Value |
+| --- | --- |
+| `token` | Bearer token, masked. Bound to the workspace (send no `anthropic-workspace-id` header). Lives ~600 s: mint it right before the call. |
+| `model-opus`, `model-sonnet`, `model-haiku` | Newest `claude-<family>-*` id from `/v1/models` by `created_at`; empty (with a warning) if the family is absent. |
+
+The ids are repository variables, or organization variables for an org. The
+federation rule's subject must match GitHub's id-qualified subject, e.g.
+`repo:dustfeather@2559407/*`; a plain `repo:dustfeather/*` fails the exchange
+with `match_subject_prefix`.
+
 ## Usage
 
 Each calling repo has a tiny shim. The shim handles trigger configuration
