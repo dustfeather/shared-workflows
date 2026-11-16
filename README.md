@@ -717,7 +717,7 @@ permissions:
   id-token: write
 steps:
   - id: anthropic
-    uses: dustfeather/shared-workflows/.github/actions/anthropic-token@v9
+    uses: dustfeather/shared-workflows/.github/actions/anthropic-token@v10
     with:
       federation-rule-id: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}
       organization-id: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}
