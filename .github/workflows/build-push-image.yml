@@ -18,11 +18,11 @@ name: Build and push image (reusable)
 #
 #   build:
 #     permissions: { contents: read, packages: write }
-#     uses: dustfeather/shared-workflows/.github/workflows/build-push-image.yml@v9
+#     uses: dustfeather/shared-workflows/.github/workflows/build-push-image.yml@v10
 #   deploy:
 #     needs: build
 #     permissions: { contents: read }
-#     uses: dustfeather/shared-workflows/.github/workflows/deploy-k8s.yml@v9
+#     uses: dustfeather/shared-workflows/.github/workflows/deploy-k8s.yml@v10
 #     with:
 #       runner: arc-<your-repo-pool>   # required since v9, no default
 #       image: ${{ needs.build.outputs.image }}
@@ -33,7 +33,7 @@ name: Build and push image (reusable)
 #
 #   image:
 #     permissions: { contents: read, packages: write }
-#     uses: dustfeather/shared-workflows/.github/workflows/build-push-image.yml@v9
+#     uses: dustfeather/shared-workflows/.github/workflows/build-push-image.yml@v10
 #     with:
 #       push: false
 #

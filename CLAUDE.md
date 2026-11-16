@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Library of reusable GitHub Actions workflows (`workflow_call`) in `.github/workflows/`, consumed by every other repo under this account via `uses: dustfeather/shared-workflows/.github/workflows/<name>.yml@v9`. No app code. A merged change ships to every caller on next run — treat blast radius accordingly. Two workflows are NOT callable: this repo's own automation, `tag-release.yml` (cuts the version tag) and `guard-tests.yml` (runs the guard suites below, plus actionlint over every workflow). No workflow here reviews or merges PRs: review runs locally before the push, merges are by hand.
+Library of reusable GitHub Actions workflows (`workflow_call`) in `.github/workflows/`, consumed by every other repo under this account via `uses: dustfeather/shared-workflows/.github/workflows/<name>.yml@v10`. No app code. A merged change ships to every caller on next run — treat blast radius accordingly. Two workflows are NOT callable: this repo's own automation, `tag-release.yml` (cuts the version tag) and `guard-tests.yml` (runs the guard suites below, plus actionlint over every workflow). No workflow here reviews or merges PRs: review runs locally before the push, merges are by hand.
 
 ## Verifying changes
 
